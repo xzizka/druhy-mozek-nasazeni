@@ -78,7 +78,9 @@ else
     python3 "$SCRIPTS/corpus_gutenberg.py" || log "gutenberg skončil s chybou, pokračuji"
     log "--- fáze 1: doplňuji češtinu z Wikipedie ---"
     # Gutenberg má česky jen 11 knih; zbytek musí přijít odjinud.
-    python3 "$SCRIPTS/corpus_wiki.py" cs 50000000 60000 || log "wiki cs selhala, pokračuji"
+    # 55 MB, ne 50: 400 českých dokumentů po 120 kB je 48 MB a filtr
+    # krátkých odstavců ubere dalších ~6 %.
+    python3 "$SCRIPTS/corpus_wiki.py" cs 55000000 60000 || log "wiki cs selhala, pokračuji"
     # Latina z Gutenbergu je taky tenká, doplň encyklopedií.
     python3 "$SCRIPTS/corpus_wiki.py" la 13000000 20000 || log "wiki la selhala, pokračuji"
     du -sh "$CORPUS"/raw/* 2>/dev/null

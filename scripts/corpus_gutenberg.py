@@ -19,8 +19,18 @@ UA = "brain-corpus-builder/1.0 (osobni test retrieval sluzby; kontakt ozizka@leg
 DELAY = 1.0
 
 # Kolik bajtů čistého textu chci na jazyk. Přepsatelné kvůli zkušebnímu běhu:
-#   TARGETS="la=900000,cs=900000" python3 fetch-gutenberg.py
-TARGETS = {"en": 38_000_000, "de": 26_000_000, "la": 13_000_000, "cs": 99_000_000}
+#   TARGETS="la=900000,cs=900000" python3 corpus_gutenberg.py
+#
+# ČÍSLA MAJÍ REZERVU ZÁMĚRNĚ. corpus_build.py zahazuje odstavce kratší než
+# 120 znaků a ta ztráta není malá ani rovnoměrná — změřeno na staženém korpusu:
+#
+#   cs 6 %   de 5 %   la 8 %   en 16 %
+#
+# Angličtina ztrácí nejvíc, protože Bible a romány mají spoustu krátkých řádků
+# (dialogy, verše, číslování). První verze počítala cíle jako
+# `počet_dokumentů * 120 kB` bez rezervy a korpus by skončil na ~946 místo 1000.
+# Cíl je proto `počet * 120 kB / (1 - ztráta)` plus ~15 % navíc.
+TARGETS = {"en": 48_000_000, "de": 30_000_000, "la": 16_500_000, "cs": 99_000_000}
 if os.environ.get("TARGETS"):
     TARGETS = {k: int(v) for k, v in
                (p.split("=") for p in os.environ["TARGETS"].split(","))}
