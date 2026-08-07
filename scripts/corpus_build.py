@@ -62,6 +62,7 @@ def build_body(src, lang: str, rnd: random.Random) -> str | None:
     """Skládá odstavce a nadpisy, dokud skutečný chunker nedá >= MIN_CHUNKS."""
     parts: list[str] = []
     n_para = 0
+    chars = 0
     section = 0
     while True:
         try:
@@ -75,8 +76,16 @@ def build_body(src, lang: str, rnd: random.Random) -> str | None:
                 parts.append(f"\n### {SUB[lang]} {section}.1\n")
         parts.append(para)
         n_para += 1
-        # Ověřovat po každém odstavci je drahé; kontroluj po dávkách.
-        if n_para % 20 == 0:
+        chars += len(para)
+        # Ověřovat po každém odstavci je drahé, ale po dvaceti zase hrubé:
+        # německé knihy mají dlouhé odstavce a jedna dvacetiodstavcová dávka
+        # dokument přestřelila ze 100 rovnou na ~140 chunků. Každý německý
+        # dokument pak spotřeboval o třetinu víc suroviny a z 24 MB jich
+        # vyšlo 176 místo 200.
+        #
+        # Řešení má dvě části: nekontrolovat vůbec, dokud nemůže být hotovo
+        # (levná zarážka podle počtu znaků), a pak kontrolovat po pěti.
+        if chars >= MIN_CHUNKS * 1000 and n_para % 5 == 0:
             body = "\n\n".join(parts)
             if len(chunker.chunk_markdown(body)) >= MIN_CHUNKS:
                 return body
