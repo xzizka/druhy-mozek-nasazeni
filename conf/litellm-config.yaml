@@ -1,0 +1,203 @@
+# =====================================================================
+# LiteLLM Proxy - fáze 1
+#
+# Veškerá generativní inference je externí. LiteLLM tady není kvůli
+# routingu (OpenRouter routuje sám), ale kvůli třem věcem, které jinde
+# nedostaneš: jeden OpenAI-kompatibilní endpoint pro všechny providery,
+# virtual keys s rozpočtem per komponenta, a jedno místo pro telemetrii.
+#
+# Image pinuj na konkrétní stable tag, ne main-latest. LiteLLM vydává
+# velmi často a DB migrace bývají breaking.
+# =====================================================================
+
+model_list:
+  # -------------------------------------------------------------------
+  # Těžké uvažování. Alias, ne konkrétní model - komponenty volají
+  # "reasoning" a výměna modelu pod tím je konfigurační změna.
+  # -------------------------------------------------------------------
+  # OPRAVA: v ZIPu bylo `model: openai/big-pickle-large` s poznámkou
+  # "uprav podle skutečného API" a BIGPICKLE_API_BASE mířil na
+  # https://api.bigpickle.example/v1 — .example je rezervovaná TLD (RFC 2606),
+  # tedy placeholder. Skutečný poskytovatel je OpenCode Zen:
+  #   base  https://opencode.ai/zen/v1   (OpenAI-kompatibilní)
+  #   model big-pickle                   (ověřeno ve /v1/models)
+  # Prefix openai/ říká LiteLLM "OpenAI-kompatibilní endpoint", takže
+  # na provider jde model jako `big-pickle`.
+  #
+  # POZOR: OpenCode Zen v době nasazení pouští requesty i BEZ Authorization
+  # hlavičky (free preview), ale NEPLATNÝ klíč aktivně odmítne
+  # ("AuthError: Invalid API key"). Placeholder v secretu proto nestačí —
+  # musí tam být skutečný klíč z https://opencode.ai/auth (zdarma).
+  - model_name: reasoning
+    litellm_params:
+      model: openai/big-pickle
+      api_base: os.environ/BIGPICKLE_API_BASE
+      api_key: os.environ/BIGPICKLE_API_KEY
+      timeout: 120
+      num_retries: 2
+      # big-pickle je reasoning model: tokeny utraci na reasoning_content
+      # driv, nez zacne psat odpoved. Pri max_tokens=300 vratil PRAZDNY
+      # content s finish_reason=length a 817 znaku uvahy - tedy tiche
+      # selhani bez chyby, ktere by se v pipeline projevilo jako prazdny
+      # vysledek. Merenim: kratka ceska uloha spotrebovala 402 tokenu.
+      # 4000 da rezervu i delsim uloham.
+      #
+      # POZOR: tohle je DEFAULT pro pripad, kdy klient max_tokens neposle.
+      # Hodnota z requestu ma prednost - viz komentar u drop_params.
+      max_tokens: 4000
+
+  # -------------------------------------------------------------------
+  # Pracovní kůň pro běžné úlohy. OpenRouter kvůli tomu, že přepnutí
+  # modelu nevyžaduje nový provider ani nový klíč.
+  # -------------------------------------------------------------------
+  - model_name: workhorse
+    litellm_params:
+      # ZMENA: puvodne openrouter/anthropic/claude-sonnet-4.5, pote
+      # poolside/laguna-s-2.1:free. Laguna je code-centric model - na ceske
+      # uloze byla verbozni, vycerpala token limit bez dokonceni zadani
+      # a napsala "Praga" misto "Praha".
+      #
+      # gemma-4-26b vybrana merenim na ceskych ulohach:
+      #   - zakladni tvary: latence, index, vektorovy, resit  (vse spravne)
+      #   - 6 davkovych volani: 5/6 uspech, median 3,6 s, prumer 19 tokenu
+      #   - drzi cestinu; nemotron-3-ultra ve 2 z 6 pripadu vypsal anglickou
+      #     uvahu misto odpovedi, coz by se tise ulozilo do indexu
+      model: openrouter/google/gemma-4-26b-a4b-it:free
+      api_key: os.environ/OPENROUTER_API_KEY
+      timeout: 90
+      num_retries: 2
+
+  # -------------------------------------------------------------------
+  # Levný model na mechanické úlohy: tagování, titulky, přepis dotazu.
+  # Sem míří většina volání z indexační pipeline, takže cena za token
+  # rozhoduje víc než kvalita.
+  # -------------------------------------------------------------------
+  - model_name: cheap
+    litellm_params:
+      # ZMENA: puvodne openrouter/google/gemini-2.5-flash, pote
+      # nvidia/nemotron-3-ultra-550b-a55b:free. Nemotron odstranen prave
+      # z tohoto aliasu zamerne: na uloze "titulek a tagy", ktera je podle
+      # navrhu hlavni prace `cheap`, ve 2 z 6 volani odpovedel anglickou
+      # uvahou ("The user wants a title...") misto vysledku. V automatizovane
+      # indexacni pipeline se takova odpoved ulozi bez povsimnuti.
+      # Zduvodneni volby gemma-4-26b je u aliasu workhorse.
+      model: openrouter/google/gemma-4-26b-a4b-it:free
+      api_key: os.environ/OPENROUTER_API_KEY
+      timeout: 60
+
+  # -------------------------------------------------------------------
+  # Poslední záchrana pro fallback řetěz — v ZIPu nebyla, přidáno.
+  #
+  # Důvod: `workhorse` i `cheap` míří na tentýž gemma model, takže původní
+  # fallback workhorse -> cheap nechránil proti ničemu. Když gemma vrátí 429
+  # (v dávkovém testu 1 volání ze 6), sáhne fallback na tentýž rate-limitovaný
+  # endpoint. `cheap` navíc neměl fallback vůbec žádný — LiteLLM to hlásil
+  # jako "No fallback model group found for original model_group=cheap".
+  #
+  # gpt-oss-20b je z testovaných free modelů jediný další, který na české
+  # úloze odpověděl správně (základní tvary: latence, index, vektorový,
+  # řešit). Je ale pomalý (~21 s) a verbózní — v testu vyčerpal 700 tokenů
+  # bez dokončení zadání. Proto vyšší max_tokens i timeout: na poslední
+  # záchranu jde o to, aby vůbec odpověděla, ne aby byla rychlá.
+  # -------------------------------------------------------------------
+  - model_name: backstop
+    litellm_params:
+      model: openrouter/openai/gpt-oss-20b:free
+      api_key: os.environ/OPENROUTER_API_KEY
+      timeout: 150
+      max_tokens: 2500
+
+  # -------------------------------------------------------------------
+  # Volitelný lokální model (fáze 4). Zakomentovaný, dokud llama.cpp
+  # neběží - LiteLLM by jinak při startu hlásil nedostupný endpoint.
+  # -------------------------------------------------------------------
+  # - model_name: local-light
+  #   litellm_params:
+  #     model: openai/qwen3-1.7b
+  #     api_base: http://llamacpp:8088/v1
+  #     api_key: none
+
+router_settings:
+  routing_strategy: simple-shuffle
+  # Když spadne primární alias, zkus levnější. Pořadí je vědomé: raději
+  # horší odpověď než žádná, protože indexační pipeline nesmí stát.
+  #
+  # ZMENA proti navrhu: puvodne bylo
+  #     - reasoning: ["workhorse"]
+  #     - workhorse: ["cheap"]
+  #
+  # Dva duvody na uprave:
+  #
+  # 1) Hop workhorse -> cheap byl no-op. Oba aliasy miri na tentyz gemma
+  #    model, takze fallback sahal na tentyz rate-limitovany endpoint.
+  #
+  # 2) Fallback ma `reasoning`, ale UMYSLENE NE `workhorse` a `cheap`.
+  #    Zasada z README "radeji horsi odpoved nez zadna" plati pro
+  #    dostupnost, ale obraci se u dat, ktera plni index. Merenim zjisteno,
+  #    ze backstop (gpt-oss-20b) na poznamce o hunspellu vratil cesky
+  #    spravne, ale obsahove smyslene "Poznamky z ceskeho kurzu / kurz
+  #    jazyk priklady". Verohodne vypadajici nesmysl je pro index horsi nez
+  #    selhani, protoze ho nikdo nezachyti. `cheap` a `workhorse` proto
+  #    radeji spadnou nahlas a indexace se zastavi s chybou.
+  #
+  #    `reasoning` fallback ma, protoze jde o interaktivni dotazy, kde
+  #    spatnou odpoved uvidis.
+  fallbacks:
+    - reasoning: ["workhorse", "backstop"]
+  allowed_fails: 2
+  cooldown_time: 30
+
+litellm_settings:
+  drop_params: true
+  # In-memory cache. Ve fázi 1 není Valkey a pro jednu repliku nemá smysl -
+  # cache se ztratí při restartu, což u dotazů nikoho nebolí.
+  cache: true
+  cache_params:
+    type: local
+    ttl: 3600
+  # Telemetrie. Přepni na phoenix/otel, pokud jedeš observabilitu lokálně.
+  #
+  # ZMĚNA proti návrhu: zakomentováno, protože nemáme langfuse_public_key
+  # ani langfuse_secret_key. S nastavenými callbacky by LiteLLM hlásil chybu
+  # u každého requestu. Zapni takto:
+  #   1) printf '%s' 'pk-lf-...' | podman secret create langfuse_public_key -
+  #      printf '%s' 'sk-lf-...' | podman secret create langfuse_secret_key -
+  #   2) do litellm.container přidat:
+  #      Secret=langfuse_public_key,type=env,target=LANGFUSE_PUBLIC_KEY
+  #      Secret=langfuse_secret_key,type=env,target=LANGFUSE_SECRET_KEY
+  #   3) odkomentovat oba řádky níže a systemctl restart litellm
+  # success_callback: ["langfuse"]
+  # failure_callback: ["langfuse"]
+  # Neposílej obsah promptů do telemetrie, dokud nevyřešíme bezpečnostní
+  # fázi. Metadata a spotřeba tokenů stačí k tomu, aby platforma byla
+  # měřitelná; obsah poznámek je jiná kategorie dat.
+  turn_off_message_logging: true
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  # Salt pro šifrování uložených provider klíčů. ZMĚNA TÉHOTO KLÍČE
+  # ZNEPLATNÍ VŠECHNY ULOŽENÉ KLÍČE - zacházej s ním jako s master key.
+  salt_key: os.environ/LITELLM_SALT_KEY
+  # Spend logy rostou s každým requestem. Pro jednoho uživatele je chceš
+  # (jsou to jediná data o nákladech), ale nastav si retention.
+  disable_spend_logs: false
+  # Zdravotní check modelů při startu vypnutý - externí providery bys
+  # při každém restartu platil.
+  background_health_checks: false
+
+# =====================================================================
+# Virtual keys vytváříš přes /key/generate, ne v tomhle souboru.
+# Každá komponenta dostane vlastní klíč s vlastním rozpočtem, aby
+# rozbitá smyčka v jedné z nich nevyčerpala kredit celé platformy:
+#
+#   curl -X POST http://litellm:4000/key/generate \
+#     -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+#     -d '{"key_alias":"retrieval-service",
+#          "models":["cheap"],
+#          "max_budget":5, "budget_duration":"30d",
+#          "rpm_limit":60}'
+#
+# Retrieval service má vědomě jen "cheap" - nemá důvod volat reasoning
+# model a omezení modelů je nejjednodušší forma damage controlu.
+# =====================================================================

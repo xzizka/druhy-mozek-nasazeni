@@ -1,0 +1,18 @@
+# Kryton — webove UI second brainu.
+# BUILD: podman build --network=host -t localhost/kryton:latest -f Containerfile .
+FROM docker.io/library/python:3.13-slim
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+RUN set -eux; apt-get update; apt-get install -y --no-install-recommends curl; \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /srv
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY app ./app
+# ZAMERNE BEZI JAKO ROOT, na rozdil od retrieval-service.
+# Kryton ZAPISUJE do /data/markdown, ktery je na hostu root:root 0750.
+# Neprivilegovany uzivatel v kontejneru by dostal permission denied.
+# Hranici tvori unprivilegovany LXC, ne uzivatel v kontejneru - presne to
+# rika i 02-guest-bootstrap.sh: "root uvnitr unprivilegovaneho kontejneru
+# je uz namapovany na neprivilegovany UID hostitele, takze hranice je stejna".
+EXPOSE 3001
+CMD ["python", "-m", "app.main"]

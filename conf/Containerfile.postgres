@@ -1,0 +1,27 @@
+# =====================================================================
+# PostgreSQL 17 + pgvector + české hunspell slovníky
+#
+# Vlastní image je nutný, protože PostgreSQL nedodává snowball stemmer
+# pro češtinu a slovníkové soubory musí ležet v $SHAREDIR/tsearch_data
+# uvnitř kontejneru. Mountovat je zvenku by šlo, ale image je
+# reprodukovatelný a slovník je součást schématu, ne konfigurace.
+#
+# build:  podman build -t localhost/postgres-cs:17 -f Containerfile.postgres .
+# =====================================================================
+FROM docker.io/pgvector/pgvector:pg17
+
+# hunspell-cs je na Debianu v UTF-8, takže stačí kopie bez iconv.
+# Postgres vyžaduje přípony .dict a .affix a kódování shodné s databází.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends hunspell-cs; \
+    TSD="$(pg_config --sharedir)/tsearch_data"; \
+    install -m 0644 /usr/share/hunspell/cs_CZ.dic "$TSD/cs_cz.dict"; \
+    install -m 0644 /usr/share/hunspell/cs_CZ.aff "$TSD/cs_cz.affix"; \
+    apt-get purge -y --auto-remove hunspell-cs; \
+    rm -rf /var/lib/apt/lists/*; \
+    test -s "$TSD/cs_cz.dict"; \
+    test -s "$TSD/cs_cz.affix"
+
+# Konfigurace se montuje zvenku; tohle jen zapne include adresář.
+RUN mkdir -p /etc/postgresql/conf.d

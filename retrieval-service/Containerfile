@@ -1,0 +1,38 @@
+# Retrieval Service — hybridni vyhledavani nad retrieval schematem.
+#
+# BUILD: podman build --network=host -t localhost/retrieval-service:latest \
+#            -f Containerfile .
+# --network=host je nutny, protoze v tomto LXC neni /dev/net/tun a pasta,
+# kterou podman 5 pouziva pro sit build kontejneru, na tom spadne.
+FROM docker.io/library/python:3.13-slim
+
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+
+# curl kvuli HealthCmd v quadletu (slim image ho nema).
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends curl; \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /srv
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY app ./app
+
+# Nebezet jako root. Do DB se chodi pres siť, takze jedina vec, kterou sluzba
+# na filesystemu potrebuje, je CIST namontovany markdown.
+#
+# GID JE PRIBITE NA 10001 ZAMERNE. Podman tady bezi rootful bez user namespace,
+# takze uid/gid v kontejneru = uid/gid na hostu. Adresare pod /srv/brain zaklada
+# 02-guest-bootstrap.sh jako 0750 root:root a `retrieval` je jediny kontejner,
+# ktery nebezi jako root - bez shodne skupiny na hostu do /data/markdown vubec
+# nevleze a reindex najde nula souboru, aniz by cokoliv spadlo.
+# Bez --gid by useradd pridelil prvni volny systemovy gid (u python:3.13-slim
+# vyslo 999), coz je na hostu systemd-journal - tedy nahoda, na ktere se stavet
+# neda. Protejsek: `groupadd --system --gid 10001 retrieval` + chgrp na hostu.
+RUN groupadd --system --gid 10001 retrieval \
+ && useradd --system --uid 10001 --gid 10001 --no-create-home retrieval
+USER 10001
+
+EXPOSE 8080
+CMD ["python", "-m", "app.main"]

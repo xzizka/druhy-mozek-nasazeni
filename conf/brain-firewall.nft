@@ -1,0 +1,75 @@
+#!/usr/sbin/nft -f
+#
+# Firewall kontejneru brain — v ZIPu nebyl, přidáno při nasazení.
+#
+# Proč uvnitř kontejneru a ne v Proxmoxu: firewall guestů v PVE se uplatní
+# jen když je zapnutý clusterový firewall (Datacenter → Firewall → enable).
+# Ten je na pve1 vypnutý a jeho zapnutí se dotkne hostu i všech šesti
+# existujících guestů — při chybném pravidle si zamkneš přístup k Proxmoxu.
+# Tohle má stejný efekt a lokální riziko.
+#
+# ZÁMĚRNĚ NEPOUŽÍVÁ `flush ruleset`: netavark si drží vlastní tabulku
+# `netavark` s DNAT pro publikované porty a SNAT pro brain.network.
+# Flush by ji smazal a rozbil síť kontejnerů, dokud by je netavark
+# znovu nevytvořil. Proto se spravuje jen tabulka `inet brain`.
+#
+# POZOR na dvě cesty, kterými provoz přichází:
+#   - INPUT   ... na služby běžící přímo v kontejneru (sshd)
+#   - FORWARD ... na publikované porty podmanu, protože po DNAT se paket
+#                 už neroutuje do INPUT, ale forwarduje na brain.network.
+# Omezit jen INPUT by publikované porty nechalo otevřené.
+
+# Idempotentní záměna: vytvoř (no-op když existuje) a zahoď, pak definuj.
+table inet brain
+delete table inet brain
+
+table inet brain {
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        iif "lo" accept
+        ct state established,related accept
+
+        # ICMP kvůli diagnostice (ping, MTU discovery).
+        ip protocol icmp accept
+        ip6 nexthdr ipv6-icmp accept
+
+        # DHCP klient — adresu dává opnsense.
+        udp sport 67 udp dport 68 accept
+
+        # Tailscale. V userspace módu (chybí /dev/net/tun) chodí provoz
+        # přes loopback, který je povolený výše. Až /dev/net/tun bude,
+        # vznikne tailscale0 a začne platit tohle pravidlo.
+        iifname "tailscale0" accept
+
+        # Podman bridge: kontejnery se dotazují aardvark-dns na 10.89.7.1:53.
+        # Bez tohoto přestane fungovat rozlišování jmen mezi službami
+        # (postgres, infinity, litellm) a rozpadne se celý návrh.
+        iifname "podman*" accept
+        iifname "veth*" accept
+
+        # Homelab LAN: SSH a publikované služby.
+        ip saddr 10.20.0.0/24 tcp dport { 22, 3001, 4000, 5432, 7997 } accept
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy accept;
+
+        ct state established,related accept
+
+        # Provoz mezi kontejnery na brain.network musí projít PŘED omezením
+        # níže — jinak by se litellm nedostal na postgres:5432, protože jeho
+        # zdrojová adresa není z 10.20.0.0/24.
+        ip saddr 10.89.7.0/24 ip daddr 10.89.7.0/24 accept
+
+        # Publikované porty: po DNAT míří na brain.network. Pusť jen
+        # z homelab LAN, ostatní zahoď.
+        ip daddr 10.89.7.0/24 tcp dport { 3001, 4000, 5432, 7997 } \
+            ip saddr 10.20.0.0/24 accept
+        ip daddr 10.89.7.0/24 tcp dport { 3001, 4000, 5432, 7997 } drop
+    }
+
+    chain output {
+        type filter hook output priority filter; policy accept;
+    }
+}

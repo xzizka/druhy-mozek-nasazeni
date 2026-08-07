@@ -1,0 +1,9 @@
+# Bajtkód — v repu nemá co dělat, a navíc se tu válely zbytky pro Python 3.8,
+# zatímco kontejner je 3.13.
+__pycache__/
+*.pyc
+
+# Stažený korpus zátěžového testu. Desítky MB reálných knih, které jdou
+# kdykoliv stáhnout znovu přes scripts/corpus_gutenberg.py.
+corpus/
+raw/

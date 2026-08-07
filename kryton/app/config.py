@@ -1,0 +1,36 @@
+"""Konfigurace Krytona. Vychází z kryton.container."""
+import os
+
+DATABASE_URL = os.environ["DATABASE_URL"]
+RETRIEVAL_URL = os.environ.get("RETRIEVAL_URL", "http://retrieval:8080")
+LITELLM_URL = os.environ.get("LITELLM_URL", "http://litellm:4000")
+LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY", "")
+MARKDOWN_ROOT = os.environ.get("MARKDOWN_ROOT", "/data/markdown")
+
+# Alias, ne konkrétní model — výměna modelu je pak konfigurační změna
+# v litellm-config.yaml, ne v kódu.
+ANSWER_MODEL = os.environ.get("ANSWER_MODEL", "reasoning")
+
+# reasoning je big-pickle, tedy reasoning model: tokeny utrácí na
+# reasoning_content dřív, než začne psát odpověď. Změřeno, že při
+# max_tokens=300 vrátil PRÁZDNÝ content s finish_reason=length.
+# Proto tisíce, ne stovky.
+ANSWER_MAX_TOKENS = int(os.environ.get("ANSWER_MAX_TOKENS", "3000"))
+ANSWER_TIMEOUT = float(os.environ.get("ANSWER_TIMEOUT", "180"))
+
+# Kolik chunků poslat modelu jako kontext. Retrieval vrací RESULT_LIMIT=8.
+CONTEXT_CHUNKS = int(os.environ.get("CONTEXT_CHUNKS", "8"))
+
+# Heslo z podman secretu. Bez něj se aplikace odmítne spustit — port 3001
+# je publikovaný na 0.0.0.0 a firewall pouští celý segment 10.20.0.0/24,
+# takže běh bez autentizace by znamenal poznámky otevřené celému homelabu.
+AUTH_PASSWORD = os.environ.get("AUTH_PASSWORD", "")
+SESSION_SECRET = os.environ.get("SESSION_SECRET", "")
+SESSION_HOURS = int(os.environ.get("SESSION_HOURS", "720"))
+
+# Po zápisu poznámky zavolat retrieval /reindex. Inkrementální běh nad
+# nezměněným korpusem je nula, takže je to zdarma — a bez toho je index
+# zastaralý až do dalšího ručního reindexu.
+REINDEX_AFTER_WRITE = os.environ.get("REINDEX_AFTER_WRITE", "1") not in ("0", "false", "no")
+
+LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "3001"))

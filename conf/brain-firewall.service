@@ -1,0 +1,20 @@
+[Unit]
+# Trvalé nahrání firewallu kontejneru brain — v ZIPu nebylo, přidáno při nasazení.
+#
+# Proč vlastní unit a ne /etc/nftables.conf: debianí nftables.service začíná
+# `flush ruleset`, což by smazalo i tabulku `netavark` s DNAT pro publikované
+# porty a SNAT pro brain.network. Tenhle unit spravuje jen tabulku `inet brain`.
+Description=Firewall kontejneru brain (tabulka inet brain)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /srv/brain/conf/brain-firewall.nft
+ExecStop=/usr/sbin/nft delete table inet brain
+# Bez tohoto by selhání zastavení (tabulka už neexistuje) shodilo unit.
+ExecStop=-/bin/true
+
+[Install]
+WantedBy=multi-user.target
