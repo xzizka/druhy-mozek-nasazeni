@@ -387,6 +387,38 @@ a `Containerfile.postgres` jsou **beze změny** — fungovaly na první pokus.
   byla jediný kanál pro první krok. Použit jen na instalaci Tailscale.
 - `scripts/ct-bootstrap.sh` — to, co se přes konzoli poslalo.
 
+## PRÁVĚ BĚŽÍ: zátěžový test (od 2026-08-07 13:15 UTC)
+
+Systemd jednotka `scale-test` na brainu. Konec indexace čekán **2026-08-09
+kolem 03:45 UTC**, s HNSW a měřením kolem 05:00.
+
+| | |
+|---|---|
+| korpus | **975 dokumentů / ~113 764 chunků**, každý dokument přes 100 chunků |
+| jazyky | cs 399, en 300, de 176, la 100 |
+| zdroj | reálné knihy z Gutenbergu + česká Wikipedie |
+| tempo | **1,22 s/chunk** (shodné s validačním měřením) |
+| umístění | `/srv/brain/markdown/_scale/`, gitignorováno i vyjmuto z indexu |
+
+Stav a výsledek kdykoliv: `scripts/11-scale-report.sh`. Běh je resumovatelný,
+po pádu stačí spustit `10-scale-test.sh` znovu. Úklid `12-scale-cleanup.sh`.
+
+**Proč to běží:** dosavadní ověření vícejazyčnosti stálo na 4, později 8
+dokumentech. To stačilo na tvrzení o mechanismech (zapisuje se `lang`, recykluje
+se podle obsahu), ale na nic o kvalitě — při čtyřech dokumentech vrací dense
+větev vždycky všechny, takže „funguje napříč jazyky" bylo pravda triviálně.
+
+**Dvě čísla, na která se v reportu dívat:** přesnost detekce jazyka na ~97
+dokumentech bez frontmatteru (ground truth je v názvu souboru, takže je to
+skutečné měření, ne kruh) a per-jazyk top-1 s MRR proti known-good dokumentu.
+
+**Dva kroky čekají na doběhnutí:** `git -C /root/deploy pull` (nesmí se dělat za
+běhu — bash čte běžící skript z disku průběžně) a `rm -rf /root/deploy.old`.
+
+Co příprava testu odhalila, je zapsané jinde: cena reranku nad reálnými chunky
+v `PIPELINE.md`, práva na `/srv/brain/markdown` a izolace smoke testu jako
+body 6 a 7 výš.
+
 ## Doporučené další kroky
 
 1. **Napsat Krytona** — jediná zbývající velká věc. Retrieval Service hotový
@@ -416,19 +448,32 @@ a `Containerfile.postgres` jsou **beze změny** — fungovaly na první pokus.
    `brain-markdown-sync` každých 15 minut commituje **i pushuje**.
    Ověřeno 2026-08-07: `origin/main..main` prázdné, pracovní strom čistý.
 
-8. **Zdrojáky nasazení nejsou ve verzování — jediná skutečná mezera v záloze.**
-   Ověřeno 2026-08-07: ani `/root/deploy` na brainu, ani pracovní adresář na
-   stanici není git repozitář. Přitom je v nich celý systém: `retrieval-service/`,
-   `sql/` s migracemi, `scripts/`, `conf/`, `kryton/` a oba reporty.
+8. ~~Zdrojáky nasazení nejsou ve verzování~~ — **vyřešeno 2026-08-07.**
+   Do té chvíle nebyl git repozitář ani `/root/deploy` na brainu, ani pracovní
+   adresář na stanici, přestože je v nich celý systém. Poznámky ztrátu obou
+   strojů přežily, systém, který je indexuje, ne.
 
-   Poznámky ztrátu obou strojů přežijí, systém, který je indexuje, ne. Založit
-   git a odklopit ho stejně jako poznámky je nejlevnější náprava, jakou tenhle
-   projekt ještě má k dispozici.
+   Teď: `xzizka/druhy-mozek-nasazeni`, privátní (ověřeno neautentizovaným
+   dotazem na API — vrací 404, přitom `ls-remote` prokázal existenci).
+   `/root/deploy` je **klon**, ne kopie, a nasazuje se `git pull`em.
 
-   **Do repozitáře nepatří secrets** — podman secrets žijí v podman storage na
-   brainu a v souborech nikde nejsou. Jejich ztráta znamená přegenerovat hesla
-   k DB a znovu vydat API klíče (OpenRouter, OpenCode Zen). To je oddělená
-   otázka, kterou git neřeší.
+   **Brain má read-only deploy key** (`git push --dry-run` odmítnut). Je to
+   záměr: co nemůže pushnout, nemůže rozejít obě kopie.
+
+   Klíč je vlastní, `id_ed25519_nasazeni`, a v `/root/.ssh/config` je pod
+   aliasem `Host github-nasazeni`. **Alias je nutnost, ne kosmetika:** GitHub
+   nedovolí použít jeden deploy key na dvou repozitářích a `IdentitiesOnly yes`
+   přibíjí jeden klíč na jeden `Host`. Bez aliasu by se na tenhle repozitář
+   nabídl klíč od poznámek a spojení skončí `Permission denied`.
+
+   Pravidlo pro udržení: **na brainu se soubory needitují.** Kontrola:
+   `git -C /root/deploy status --short` musí být prázdné.
+
+   **V repozitáři nejsou žádné secrets** a nemají tam být — hesla i API klíče
+   jdou přes podman secrets a odkazy `os.environ/` v `litellm-config.yaml`
+   (ověřeno grepem před prvním commitem). Jejich ztráta ale znamená
+   přegenerovat hesla k DB a znovu vydat klíče (OpenRouter, OpenCode Zen),
+   a **tuhle mezeru git neuzavírá**.
 
    Databáze `retrieval` zálohu nepotřebuje — je to derivovaný index a dá se
    kdykoliv postavit znovu z markdownu. Databáze `kryton` derivovaná **nebude**
