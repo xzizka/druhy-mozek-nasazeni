@@ -9,7 +9,7 @@ Stav: `ZAZNAMENÁNO` → `ANALYZOVÁNO` → `SCHVÁLENO` → `HOTOVO`.
 
 ## P1 — Rozpoznat halucinačně rizikové dotazy a odkázat na `/korpus`
 
-**Stav: P1a HOTOVO (2026-08-09) · P1b SCHVÁLENO, nezačato**
+**Stav: HOTOVO (2026-08-09)** — P1a i P1b nasazeno a ověřeno živě.
 
 Rozhodnuto 2026-08-09:
 
@@ -61,17 +61,43 @@ selhání, protože ho nikdo nezachytí.
   Nestačí to: model se k psaní vůbec nedostal, respektive si odpověď složil
   z úryvků.
 
-### Otevřené otázky
+### Jak to dopadlo
 
-1. Čím dotaz klasifikovat — heuristika nad klíčovými slovy, nebo LLM
-   klasifikátor (alias `cheap`, tedy volání navíc na každý dotaz)?
-2. U P1b: kdo píše SQL? Text-to-SQL přes LLM je nejmocnější, ale generovaný
-   dotaz nad `platform_ro` je pořád nová plocha (náklad, chybné agregace,
-   nekonečné dotazy). Alternativou je katalog předpřipravených metrik.
-3. Kam se doplněné výsledky ukládají a jak stárnou? Korpus se mění při každé
-   indexaci, takže uložené číslo je za chvíli neaktuální.
-4. Má `/korpus` zůstat statická stránka, nebo se stát rostoucím katalogem
-   metrik s vlastní tabulkou?
+**P1a.** Do promptu každé odpovědi jde blok „Ověřená čísla o korpusu"
+z `/stats` (~100 tokenů) a systémový prompt zakazuje dopočítávat počty
+z úryvků. Navíc heuristika `core.je_agregacni()` zobrazí u agregačních
+dotazů odkaz na `/korpus` — nic neodklání, jen upozorní.
+
+Změřeno na dotazu, který předtím vyrobil nesmysl: místo „66 anglických knih
+= knihy Bible" vrátí 979 / cs 400 / en 301 / de 177 / la 101, sám odliší
+„dokument" od „knihy" a odmítne si domýšlet.
+
+**P1b.** `kryton/app/analytics.py`. Agregační dotaz → model napíše SELECT →
+spustí se nad `retrieval` pod rolí `platform_ro` → výsledek jde modelu jako
+další ověřený podklad a uloží se jako **nepřipnutá** metrika. Do `/korpus`
+ji připne až člověk kliknutím; vidí přitom otázku, SQL i výsledek.
+
+Bezpečnost stojí na roli, ne na kontrole řetězce — `platform_ro` má jen
+SELECT, ověřeno pokusem o zápis (`permission denied for table document`).
+`check_sql()` je druhá vrstva: jediný SELECT/WITH, žádný středník, žádná
+DDL. K tomu read-only transakce, `statement_timeout` a strop řádků vynucený
+obalením do poddotazu.
+
+Stárnutí: k metrice se ukládá otisk korpusu (počet dokumentů +
+`max(updated_at)`) a `/korpus` ji při změně označí za zastaralou.
+
+Ověřeno živě: model napsal
+`SELECT lang AS jazyk, COUNT(*) AS pocet_dokumentu FROM retrieval.document
+GROUP BY lang`, výsledek sedí na databázi, připnutí i zobrazení fungují.
+
+### Co z toho stojí za zapamatování
+
+`SET LOCAL statement_timeout = %s` prošlo všemi 89 kontrolami smoke testu
+a na živém Postgresu spadlo na `syntax error at or near "$1"` — SET LOCAL
+je utility příkaz a placeholder do něj nepatří. Smoke test databázi stubuje,
+takže tuhle třídu chyb nikdy nechytí. Proto vznikl
+**`scripts/14-analytics-check.sh`** — integrační kontrola proti skutečné
+databázi. Pouštěj ji, když se sáhne na `analytics.py`.
 
 ---
 

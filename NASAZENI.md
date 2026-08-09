@@ -176,7 +176,14 @@ nepoužívá; drží se jen kvůli reprodukovatelnosti `scripts/06-eval-reranker
   FastAPI, server-rendered HTML se šablonami inline, žádný build step.
   Endpointy: `/healthz`, `/stats`, `/prihlasit`, `/odhlasit`, `/`, `/dotaz`,
   `/konverzace/{id}`, `/konverzace/smazat`, `/hodnoceni`, `/zachytit`,
-  `/historie`, `/inbox`, `/korpus`.
+  `/historie`, `/inbox`, `/korpus`, `/metrika/pripnout`, `/metrika/smazat`.
+
+  **Analytika (P1b)** běží pod rolí `platform_ro` přes secret
+  `platform_ro_url` — jen SELECT na schéma `retrieval`, ověřeno pokusem
+  o zápis. Agregační dotaz se spočítá nad databází a výsledek se uloží jako
+  nepřipnutá metrika; na `/korpus` ho připne až člověk. Kontrola:
+  `scripts/14-analytics-check.sh` (běží proti skutečné DB — smoke test ji
+  stubuje, takže chyby na spojení nechytí).
 
   **`/korpus` je tam schválně.** Agregační otázky („kolik je kterých knih")
   přes RAG nejdou — model dostane osm úryvků a z nich tisíc dokumentů

@@ -72,6 +72,8 @@ except Exception as e:
     check("role platform_ro neumí zapisovat", "permission denied" in str(e).lower(),
           str(e)[:80])
 
+analytics.close()   # bez toho psycopg nadává na nedoběhlá vlákna poolu
+
 print()
 if FAIL:
     print("SELHALO %d: %s" % (len(FAIL), ", ".join(FAIL)))
