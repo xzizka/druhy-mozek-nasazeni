@@ -51,3 +51,21 @@ SESSION_HOURS = int(os.environ.get("SESSION_HOURS", "720"))
 REINDEX_AFTER_WRITE = os.environ.get("REINDEX_AFTER_WRITE", "1") not in ("0", "false", "no")
 
 LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "3001"))
+
+# ---------------------------------------------------------------------------
+# Analytika (P1b): dotazy typu „kolik", na které se z osmi úryvků odpovědět
+# nedá, se spočítají nad databází retrievalu.
+#
+# Jede se pod rolí `platform_ro`, která má na schéma `retrieval` jen SELECT
+# (sql/01-bootstrap.sql, sql/02-retrieval.sql). To je ta podstatná pojistka —
+# kontrola SQL v analytics.py je jen druhá vrstva, ne ta hlavní. Bez tohohle
+# DSN se analytika prostě vypne a Kryton běží dál.
+# ---------------------------------------------------------------------------
+ANALYTICS_DATABASE_URL = os.environ.get("ANALYTICS_DATABASE_URL", "")
+
+# SQL psát je těžší než tahat klíčová slova, takže default je `reasoning`,
+# ne `cheap`. Neběží to v horké cestě — jen když se někdo zeptá na počty —
+# takže pomalejší model tu nevadí. big-pickle navíc nemá denní strop.
+ANALYTICS_MODEL = os.environ.get("ANALYTICS_MODEL", "reasoning")
+ANALYTICS_SQL_TIMEOUT_MS = int(os.environ.get("ANALYTICS_SQL_TIMEOUT_MS", "10000"))
+ANALYTICS_MAX_ROWS = int(os.environ.get("ANALYTICS_MAX_ROWS", "200"))

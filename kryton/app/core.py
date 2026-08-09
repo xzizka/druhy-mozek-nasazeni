@@ -111,7 +111,10 @@ def corpus_facts() -> str:
     by_lang = s.get("documents_by_lang") or {}
     parts = ", ".join("%s %s" % (LANG_NAMES.get(c, c), by_lang[c])
                       for c in sorted(by_lang, key=lambda c: -by_lang[c]))
-    return ("FAKTA O KORPUSU (autoritativní, přímo z databáze):\n"
+    # Hlavička je schválně čitelná věta, ne interní nadpis verzálkami:
+    # model ji cituje doslova a uživateli se pak v odpovědi objeví
+    # „Podle FAKTA O KORPUSU…", což vypadá jako uniklá vnitřnost.
+    return ("Ověřená čísla o korpusu (přímo z databáze):\n"
             "- dokumentů celkem: %s\n"
             "- dokumentů podle jazyka: %s\n"
             "- textových úseků (chunků) celkem: %s\n"
@@ -150,11 +153,13 @@ SYSTEM = (
     "Je lepší přiznat, že v poznámkách odpověď není, než ji vymyslet.\n"
     "Předchozí zprávy konverzace slouží jen k pochopení, na co se uživatel "
     "ptá teď. Nejsou zdrojem faktů — ta ber výhradně z úryvků.\n"
-    "POČTY A SOUHRNY ber VÝHRADNĚ z bloku FAKTA O KORPUSU, nikdy je "
-    "nedopočítávej z úryvků. Úryvků dostáváš jen několik a celkový obraz "
-    "z nich složit nejde — spočítat knihy zmíněné v úryvcích a vydávat to "
-    "za obsah databáze je chyba. Když v FAKTECH odpověď není, řekni to "
-    "přímo a odkaž uživatele na stránku /korpus."
+    "Počty a souhrny ber VÝHRADNĚ z bloků s ověřenými čísly o korpusu "
+    "a s výsledkem výpočtu nad databází, nikdy je nedopočítávej z úryvků. "
+    "Úryvků dostáváš jen několik a celkový obraz z nich složit nejde — "
+    "spočítat knihy zmíněné v úryvcích a vydávat to za obsah databáze "
+    "je chyba. Když ověřená čísla na otázku neodpovídají, řekni to přímo "
+    "a odkaž uživatele na stránku /korpus.\n"
+    "Piš plynulou češtinou a názvy těch bloků necituj doslova."
 )
 
 
@@ -176,8 +181,8 @@ def history_messages(prior: list[dict]) -> list[dict]:
     return out
 
 
-def answer(query: str, hits: list[dict],
-           prior: list[dict] | None = None) -> tuple[str, str, int]:
+def answer(query: str, hits: list[dict], prior: list[dict] | None = None,
+           extra: str = "") -> tuple[str, str, int]:
     """Vrátí (odpověď, model, latence_ms).
 
     `prior` jsou předchozí zprávy konverzace. Pozor na hranici: slouží jen
@@ -190,15 +195,17 @@ def answer(query: str, hits: list[dict],
         + (f" — {h['heading_path']}" if h.get("heading_path") else "")
         + f"\n{h['content']}"
         for i, h in enumerate(hits))
-    if not ctx:
+    if not ctx and not extra:
         return ("V poznámkách jsem k tomu nic nenašel.", "", 0)
 
     msgs = [{"role": "system", "content": SYSTEM}]
     msgs += history_messages(prior)
     facts = corpus_facts()
+    uryvky = f"Úryvky z poznámek:\n\n{ctx}\n\n" if ctx else ""
     msgs.append({"role": "user",
                  "content": (f"{facts}\n" if facts else "")
-                            + f"Úryvky z poznámek:\n\n{ctx}\n\nOtázka: {query}"})
+                            + (f"{extra}\n" if extra else "")
+                            + uryvky + f"Otázka: {query}"})
 
     t0 = time.time()
     r = httpx.post(

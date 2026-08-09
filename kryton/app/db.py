@@ -61,6 +61,32 @@ CREATE TABLE IF NOT EXISTS inbox (
     created_at   timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS inbox_open_ix ON inbox (created_at) WHERE processed_at IS NULL;
+
+-- Spočítané metriky nad korpusem (P1b). Spočítá se automaticky, ale do
+-- /korpus se dostane až připnutím (`pinned_at`) — model umí napsat SQL,
+-- které je syntakticky v pořádku a sémanticky mimo, a /korpus je právě ta
+-- stránka, proti které se halucinace poměřuje.
+--
+-- `fingerprint` je stav korpusu při výpočtu. Bez něj by se z /korpus stalo
+-- muzeum zastaralých čísel, protože korpus se mění každou indexací.
+--
+-- ON DELETE SET NULL, ne CASCADE: smazání konverzace nesmí odnést metriku,
+-- kterou sis mezitím připnul na /korpus.
+CREATE TABLE IF NOT EXISTS metric (
+    id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    conversation_id uuid REFERENCES conversation(id) ON DELETE SET NULL,
+    question        text NOT NULL,
+    label           text,
+    sql_text        text NOT NULL,
+    result_cols     jsonb NOT NULL DEFAULT '[]'::jsonb,
+    result_rows     jsonb NOT NULL DEFAULT '[]'::jsonb,
+    fingerprint     text NOT NULL DEFAULT '',
+    computed_at     timestamptz NOT NULL DEFAULT now(),
+    pinned_at       timestamptz
+);
+CREATE INDEX IF NOT EXISTS metric_pinned_ix ON metric (pinned_at)
+    WHERE pinned_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS metric_conv_ix ON metric (conversation_id);
 """
 
 
@@ -168,6 +194,69 @@ def inbox_open(limit: int = 100) -> list[dict]:
 def inbox_done(item_id: int) -> None:
     with _pool.connection() as conn:
         conn.execute("UPDATE inbox SET processed_at = now() WHERE id = %s", (item_id,))
+
+
+def _metric_row(r) -> dict:
+    return {"id": r[0], "conversation_id": str(r[1]) if r[1] else None,
+            "question": r[2], "label": r[3], "sql": r[4], "cols": r[5],
+            "rows": r[6], "fingerprint": r[7], "computed_at": r[8],
+            "pinned_at": r[9]}
+
+
+_METRIC_COLS = ("id, conversation_id, question, label, sql_text, result_cols, "
+                "result_rows, fingerprint, computed_at, pinned_at")
+
+
+def add_metric(conversation_id, question: str, sql: str, cols, rows,
+               fingerprint: str) -> int:
+    with _pool.connection() as conn:
+        return conn.execute(
+            "INSERT INTO metric (conversation_id, question, sql_text, "
+            "  result_cols, result_rows, fingerprint) "
+            "VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
+            (conversation_id, question[:500], sql, json.dumps(cols or []),
+             json.dumps(rows or []), fingerprint or "")).fetchone()[0]
+
+
+def metrics_for_conversation(conversation_id) -> list[dict]:
+    """Nepřipnuté metriky konverzace — u nich se nabízí tlačítko Připnout."""
+    with _pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT " + _METRIC_COLS + " FROM metric "
+            "WHERE conversation_id = %s AND pinned_at IS NULL ORDER BY id",
+            (conversation_id,)).fetchall()
+    return [_metric_row(r) for r in rows]
+
+
+def pinned_metrics() -> list[dict]:
+    with _pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT " + _METRIC_COLS + " FROM metric "
+            "WHERE pinned_at IS NOT NULL ORDER BY pinned_at").fetchall()
+    return [_metric_row(r) for r in rows]
+
+
+def pin_metric(metric_id: int, label: str = None) -> None:
+    with _pool.connection() as conn:
+        conn.execute("UPDATE metric SET pinned_at = now(), "
+                     "label = coalesce(nullif(%s,''), label) WHERE id = %s",
+                     (label, metric_id))
+
+
+def delete_metric(metric_id: int) -> int:
+    with _pool.connection() as conn:
+        return conn.execute("DELETE FROM metric WHERE id = %s",
+                            (metric_id,)).rowcount
+
+
+def update_metric_result(metric_id: int, cols, rows, fingerprint: str) -> None:
+    """Přepočet připnuté metriky — nové číslo, nový otisk, nový čas."""
+    with _pool.connection() as conn:
+        conn.execute(
+            "UPDATE metric SET result_cols=%s, result_rows=%s, fingerprint=%s, "
+            "computed_at=now() WHERE id=%s",
+            (json.dumps(cols or []), json.dumps(rows or []),
+             fingerprint or "", metric_id))
 
 
 def stats() -> dict:

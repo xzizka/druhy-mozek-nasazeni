@@ -402,6 +402,10 @@ Secret=litellm_kryton_key,type=env,target=LITELLM_API_KEY
 # Kryton se bez tehle dvou secretu ZAMERNE odmitne spustit.
 Secret=kryton_auth_password,type=env,target=AUTH_PASSWORD
 Secret=kryton_session_secret,type=env,target=SESSION_SECRET
+# Analytika (P1b). Role platform_ro ma na schema retrieval JEN SELECT,
+# takze SQL psane modelem nemuze nic zapsat ani kdyby proslo kontrolou
+# v analytics.py. Bez tohohle secretu se analytika jen nezapne.
+Secret=platform_ro_url,type=env,target=ANALYTICS_DATABASE_URL
 # ZMENA proti navrhu: puvodne PublishPort=100.64.0.1:3001:3001, tedy jen na
 # Tailscale adresu. Dohodnuto publikovat i na homelab LAN 10.20.0.0/24, a
 # protoze DHCP i Tailscale adresa jsou dynamicke, bindujeme 0.0.0.0.

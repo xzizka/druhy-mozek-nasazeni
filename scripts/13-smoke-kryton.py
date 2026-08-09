@@ -103,8 +103,9 @@ core.search = lambda q, limit=None, rewrite=None, **kw: (
     SEEN.__setitem__("rewrite", rewrite), {"results": [HIT]})[1]
 
 
-def _answer(q, hits, prior=None):
+def _answer(q, hits, prior=None, extra=""):
     SEEN["prior"] = prior
+    SEEN["extra"] = extra
     return ("Odpověď s citací [1].", "reasoning", 1234)
 
 
@@ -123,6 +124,51 @@ STATS = {
         "chunks_embedded": 0, "chunks_recycled": 0, "seconds": 1.3}},
 }
 core.corpus_stats = lambda: STATS
+
+# --- stub analytiky (P1b) ----------------------------------------------
+from app import analytics  # noqa: E402
+
+FP = "979:2026-08-09 05:11:10+00"
+AN = {"sql": "SELECT lang, count(*) AS pocet FROM retrieval.document GROUP BY lang",
+      "explain": "Počty dokumentů podle jazyka.", "cols": ["lang", "pocet"],
+      "rows": [["cs", 400], ["en", 301]], "error": None, "fingerprint": FP}
+
+analytics.init = lambda: None
+analytics.close = lambda: None
+analytics.enabled = lambda: True
+analytics.fingerprint = lambda: FP
+analytics.answer_question = lambda q: dict(AN)
+
+_metrics = []
+
+
+def _add_metric(cid, q, sql, cols, rows, fp):
+    _metrics.append({"id": len(_metrics) + 1, "conversation_id": cid,
+                     "question": q, "label": None, "sql": sql, "cols": cols,
+                     "rows": rows, "fingerprint": fp,
+                     "computed_at": datetime.now(), "pinned_at": None})
+    return len(_metrics)
+
+
+def _pin_metric(mid, label=None):
+    for m in _metrics:
+        if m["id"] == mid:
+            m["pinned_at"] = datetime.now()
+            m["label"] = label or m["label"]
+
+
+def _delete_metric(mid):
+    before = len(_metrics)
+    _metrics[:] = [m for m in _metrics if m["id"] != mid]
+    return before - len(_metrics)
+
+
+db.add_metric = _add_metric
+db.pin_metric = _pin_metric
+db.delete_metric = _delete_metric
+db.metrics_for_conversation = lambda cid: [
+    m for m in _metrics if m["conversation_id"] == cid and not m["pinned_at"]]
+db.pinned_metrics = lambda: [dict(m) for m in _metrics if m["pinned_at"]]
 
 from fastapi.testclient import TestClient  # noqa: E402
 from app import main  # noqa: E402
@@ -258,7 +304,10 @@ for q in ["Čím se ladí latence dotazu u HNSW indexu?", "A proč?",
 
 f = core.corpus_facts()
 check("fakta o korpusu nesou skutečná čísla",
-      "FAKTA O KORPUSU" in f and "979" in f and "čeština 400" in f, repr(f[:90]))
+      "Ověřená čísla o korpusu" in f and "979" in f and "čeština 400" in f,
+      repr(f[:90]))
+check("hlavička faktů není interní nadpis verzálkami",
+      "FAKTA O KORPUSU" not in f)
 check("fakta jsou krátká (do ~600 znaků)", len(f) < 600, str(len(f)))
 core.corpus_stats = _boom
 check("nedostupný retrieval fakta jen vynechá", core.corpus_facts() == "")
@@ -273,6 +322,78 @@ _msgs.clear()
 _add_message(CID, "user", "Čím se ladí latence dotazu?")
 r = c.get("/konverzace/%s" % CID)
 check("běžný dotaz odkaz neukazuje", "souhrn nebo počty" not in r.text)
+
+print("== P1b: bezpečnost generovaného SQL ==")
+check("check_sql pustí SELECT", analytics.check_sql("SELECT 1;") == "SELECT 1")
+check("check_sql pustí WITH",
+      analytics.check_sql("WITH x AS (SELECT 1) SELECT * FROM x").startswith("WITH"))
+for bad in ["DELETE FROM retrieval.document", "SELECT 1; DROP TABLE x",
+            "UPDATE retrieval.document SET lang='cs'", "",
+            "TRUNCATE retrieval.chunk", "COPY x FROM '/etc/passwd'",
+            "SELECT 1 UNION SELECT 1; INSERT INTO x VALUES (1)"]:
+    try:
+        analytics.check_sql(bad)
+        check("check_sql odmítne %r" % bad[:30], False, "propustil")
+    except analytics.AnalyticsError:
+        check("check_sql odmítne %r" % bad[:30], True)
+
+ctx = analytics.as_context(AN)
+check("výsledek jde do promptu jako tabulka",
+      "lang | pocet" in ctx and "cs | 400" in ctx, repr(ctx[:60]))
+check("selhaná analytika do promptu nic nedá",
+      analytics.as_context({"error": "boom", "cols": [], "rows": []}) == "")
+
+print("== P1b: tok od dotazu k připnutí ==")
+_msgs.clear()
+_metrics.clear()
+r = c.post("/dotaz", data={"query": "Kolik je kterých dokumentů podle jazyka?",
+                           "rewrite": "1"}, follow_redirects=False)
+check("agregační dotaz spustil analytiku", len(_metrics) == 1, str(len(_metrics)))
+check("spočítaný výsledek šel modelu jako podklad",
+      "Výsledek výpočtu" in (SEEN.get("extra") or ""), repr(SEEN.get("extra"))[:60])
+
+_msgs.clear()
+r = c.post("/dotaz", data={"query": "Čím se ladí latence?", "rewrite": "1"},
+           follow_redirects=False)
+check("běžný dotaz analytiku nespouští", len(_metrics) == 1, str(len(_metrics)))
+check("běžný dotaz nemá podklad navíc", not SEEN.get("extra"), repr(SEEN.get("extra")))
+
+r = c.get("/konverzace/%s" % CID)
+check("konverzace nabízí připnutí i SQL",
+      "Připnout na /korpus" in r.text and "SELECT lang" in r.text)
+
+r = c.post("/metrika/pripnout",
+           data={"metric_id": 1, "label": "Dokumenty podle jazyka",
+                 "zpet": "/konverzace/%s" % CID}, follow_redirects=False)
+check("připnutí přesměruje zpět",
+      r.status_code == 303 and r.headers.get("location") == "/konverzace/%s" % CID,
+      str(r.headers.get("location")))
+check("metrika je připnutá", _metrics[0]["pinned_at"] is not None)
+check("připnutá metrika už se v konverzaci nenabízí",
+      "Připnout na /korpus" not in c.get("/konverzace/%s" % CID).text)
+
+r = c.get("/korpus")
+check("/korpus ukáže připnutou metriku",
+      "Dokumenty podle jazyka" in r.text and "400" in r.text)
+check("čerstvá metrika není označená za zastaralou", "zastaralé" not in r.text)
+
+analytics.fingerprint = lambda: "1000:2026-08-10 00:00:00+00"
+check("změna korpusu označí metriku za zastaralou", "zastaralé" in c.get("/korpus").text)
+analytics.fingerprint = lambda: FP
+
+print("== P1b: přesměrování po akci ==")
+check("cizí URL se zahodí", main._bezpecne_zpet("https://zlo.example/x") == "/korpus")
+check("protokolově relativní URL se zahodí",
+      main._bezpecne_zpet("//zlo.example/x") == "/korpus")
+check("lokální cesta projde", main._bezpecne_zpet("/konverzace/x") == "/konverzace/x")
+
+r = c.post("/metrika/smazat", data={"metric_id": 1, "zpet": "/korpus"},
+           follow_redirects=False)
+check("odepnutí metriku smaže", not _metrics and r.status_code == 303)
+
+fresh2 = TestClient(main.app)
+r = fresh2.post("/metrika/pripnout", data={"metric_id": 1}, follow_redirects=False)
+check("připnutí vyžaduje přihlášení", r.headers.get("location") == "/prihlasit")
 
 print("== mazání konverzace ==")
 r = c.get("/historie")

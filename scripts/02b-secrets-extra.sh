@@ -43,6 +43,11 @@ mk_dsn() {
 
 mk_dsn litellm_database_url   litellm_app   litellm   pg_litellm_pw
 mk_dsn kryton_database_url    kryton_app    kryton    pg_kryton_pw
+# Analytika Krytona (P1b): agregační dotazy se počítají nad databází
+# retrievalu pod rolí, která tam má JEN SELECT. To je ta podstatná pojistka
+# proti SQL, které píše model — kontrola řetězce v analytics.py je až druhá
+# vrstva. Bez tohohle secretu se analytika prostě nezapne.
+mk_dsn platform_ro_url        platform_ro   retrieval pg_ro_pw
 # Retrieval Service bude v Pythonu (psycopg chce libpq URL), ne v PHP,
 # jak naznačoval původní PDO DSN v quadletu.
 mk_dsn retrieval_database_url retrieval_app retrieval pg_retrieval_pw

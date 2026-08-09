@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from jinja2 import Environment
 from markupsafe import Markup
 
-from . import config, core, db
+from . import analytics, config, core, db
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -84,12 +84,15 @@ def _startup():
         raise RuntimeError("chybi AUTH_PASSWORD nebo SESSION_SECRET — "
                            "nespoustim se bez autentizace")
     db.init()
-    log.info("start: retrieval=%s litellm=%s model=%s",
-             config.RETRIEVAL_URL, config.LITELLM_URL, config.ANSWER_MODEL)
+    analytics.init()
+    log.info("start: retrieval=%s litellm=%s model=%s analytika=%s",
+             config.RETRIEVAL_URL, config.LITELLM_URL, config.ANSWER_MODEL,
+             "zapnuta" if analytics.enabled() else "vypnuta")
 
 
 @app.on_event("shutdown")
 def _shutdown():
+    analytics.close()
     db.close()
 
 
@@ -139,6 +142,13 @@ def index(kryton_session: str = Cookie(None)):
     return page("Dotaz", render(ASK, convs=db.conversations(10)))
 
 
+# Tabulka výsledku metriky. Sdílená mezi konverzací a /korpus, aby se
+# nerozešly — očekává proměnnou `m` se `cols` a `rows`.
+TAB_METRIKY = """<table><tr>{% for c in m.cols %}<th>{{ c }}</th>{% endfor %}</tr>
+{% for r in m.rows %}<tr>{% for v in r %}<td>{{ v if v is not none else "" }}</td>{% endfor %}</tr>{% endfor %}
+</table>{% if not m.rows %}<p class="meta">Dotaz nevrátil žádné řádky.</p>{% endif %}
+<details><summary class="meta">ukázat SQL</summary><pre class="meta">{{ m.sql }}</pre></details>"""
+
 # Mazání je nevratné (CASCADE bere zprávy i hodnocení), takže potvrzení.
 # Inline JS je tu jediný na celé aplikaci — na potvrzovací mezistránku
 # to nestojí a bez JS se prostě smaže rovnou, což je pořád vědomý klik.
@@ -166,6 +176,20 @@ všech dokumentů.</p>{% endif %}
 <button name="rating" value="1">👍</button><button name="rating" value="-1">👎</button></form>
 {% endif %}</div>
 {% endfor %}
+{% for m in metriky %}<div class="msg">
+<b>Spočítáno nad databází</b>
+<div class="meta">{{ m.question }}</div>
+""" + TAB_METRIKY + """
+<form method="post" action="/metrika/pripnout" class="row" style="margin-top:.6rem">
+<input type="hidden" name="metric_id" value="{{ m.id }}">
+<input type="hidden" name="zpet" value="/konverzace/{{ cid }}">
+<input name="label" placeholder="Název na /korpus (nepovinný)" style="flex:1">
+<button>Připnout na /korpus</button></form>
+<form method="post" action="/metrika/smazat" style="margin-top:.4rem">
+<input type="hidden" name="metric_id" value="{{ m.id }}">
+<input type="hidden" name="zpet" value="/konverzace/{{ cid }}">
+<button>Zahodit</button></form></div>
+{% endfor %}
 <form method="post" action="/dotaz"><input type="hidden" name="conversation_id" value="{{ cid }}">
 <p><textarea name="query" rows="2" placeholder="Doplňující dotaz…"></textarea></p>
 <div class="row"><button>Zeptat se</button>
@@ -187,7 +211,8 @@ def conversation(cid: str, kryton_session: str = Cookie(None)):
     posledni = next((m["content"] for m in reversed(msgs) if m["role"] == "user"), "")
     return page(title or "Konverzace",
                 render(CONV, msgs=msgs, cid=cid, title=title,
-                       agregacni=core.je_agregacni(posledni)))
+                       agregacni=core.je_agregacni(posledni),
+                       metriky=db.metrics_for_conversation(cid)))
 
 
 @app.post("/dotaz")
@@ -205,9 +230,20 @@ def ask(query: str = Form(...), conversation_id: str = Form(None),
     cid = conversation_id or str(db.new_conversation(q))
     db.add_message(cid, "user", q)
     try:
+        # Agregační dotaz se navíc spočítá nad databází. Výsledek jde modelu
+        # jako další ověřený podklad — odpověď tak stojí na spočítaném čísle,
+        # ne na odhadu z úryvků. Když analytika selže, jede se dál bez ní.
+        extra = ""
+        if core.je_agregacni(q) and analytics.enabled():
+            res_an = analytics.answer_question(q)
+            extra = analytics.as_context(res_an)
+            if res_an.get("sql") and not res_an.get("error"):
+                db.add_metric(cid, q, res_an["sql"], res_an["cols"],
+                              res_an["rows"], res_an["fingerprint"])
+
         res = core.search(q, rewrite=bool(rewrite))
         hits = res["results"]
-        text, model, ms = core.answer(q, hits, prior=prior)
+        text, model, ms = core.answer(q, hits, prior=prior, extra=extra)
         cits = [{"source_path": h["source_path"], "heading_path": h.get("heading_path"),
                  "chunk_id": h["chunk_id"], "rerank_score": h.get("rerank_score")}
                 for h in hits]
@@ -332,7 +368,21 @@ sebejistý odhad.</p>
 <tr><td>indexace právě běží</td><td class="n">{{ "ano" if running else "ne" }}</td></tr>
 </table>
 {% if last %}<h2>Poslední indexace</h2><p class="meta">{{ last }}</p>{% endif %}
-{% endif %}"""
+{% endif %}
+{% if metriky %}<h2>Připnuté metriky</h2>
+<p class="meta">Spočítané nad databází a ručně potvrzené. Když se korpus
+od výpočtu změnil, je u metriky upozornění — číslo pak neber jako platné,
+dokud ho nepřepočítáš.</p>
+{% for m in metriky %}<div class="msg">
+<b>{{ m.label or m.question }}</b>
+{% if m.stale %} <span class="err" style="padding:.1rem .4rem">zastaralé</span>{% endif %}
+""" + TAB_METRIKY + """
+<div class="meta">spočítáno {{ m.computed_at.strftime("%d.%m.%Y %H:%M") }}</div>
+<form method="post" action="/metrika/smazat" style="margin-top:.4rem">
+<input type="hidden" name="metric_id" value="{{ m.id }}">
+<input type="hidden" name="zpet" value="/korpus">
+<button>Odepnout</button></form></div>
+{% endfor %}{% endif %}"""
 
 
 @app.get("/korpus", response_class=HTMLResponse)
@@ -345,7 +395,8 @@ def corpus(kryton_session: str = Cookie(None)):
         # Retrieval může být dole nebo uprostřed reindexu. Stránka s chybovou
         # hláškou je lepší než 500 — zbytek Krytona na tomhle nezávisí.
         log.warning("/stats retrievalu nedostupne: %s", e)
-        return page("Korpus", render(CORPUS, err="Retrieval neodpovídá: %s" % e))
+        return page("Korpus", render(CORPUS, err="Retrieval neodpovídá: %s" % e,
+                                     metriky=_pinned()))
 
     by_lang = s.get("documents_by_lang") or {}
     by_ts = s.get("chunks_by_ts_config") or {}
@@ -368,7 +419,49 @@ def corpus(kryton_session: str = Cookie(None)):
         total_docs=s.get("documents", 0), total_chunks=s.get("chunks", 0),
         hnsw=s.get("hnsw_index_present"), no_emb=s.get("chunks_without_embedding", 0),
         unfinished=s.get("documents_unfinished", 0), running=ix.get("running"),
-        last=last))
+        last=last, metriky=_pinned()))
+
+
+def _pinned() -> list[dict]:
+    """Připnuté metriky s příznakem, jestli je korpus mezitím jinde.
+
+    Otisk se počítá jednou na stránku. Když se ho nepodaří zjistit (vypnutá
+    analytika, nedostupná DB), radši nic neoznačím než abych označil všechno.
+    """
+    ms = db.pinned_metrics()
+    now = ""
+    if ms and analytics.enabled():
+        try:
+            now = analytics.fingerprint()
+        except Exception as e:
+            log.warning("otisk korpusu se nepodarilo zjistit: %s", e)
+    for m in ms:
+        m["stale"] = bool(now and m.get("fingerprint") and m["fingerprint"] != now)
+    return ms
+
+
+def _bezpecne_zpet(zpet: str) -> str:
+    """Jen lokální cesta. Bez toho by šlo formulářem odeslat cizí URL."""
+    return zpet if zpet.startswith("/") and not zpet.startswith("//") else "/korpus"
+
+
+@app.post("/metrika/pripnout")
+def metric_pin(metric_id: int = Form(...), label: str = Form(""),
+               zpet: str = Form("/korpus"), kryton_session: str = Cookie(None)):
+    if not logged_in(kryton_session):
+        return RedirectResponse("/prihlasit", status_code=303)
+    db.pin_metric(metric_id, label.strip())
+    log.info("metrika %s pripnuta na /korpus", metric_id)
+    return RedirectResponse(_bezpecne_zpet(zpet), status_code=303)
+
+
+@app.post("/metrika/smazat")
+def metric_delete(metric_id: int = Form(...), zpet: str = Form("/korpus"),
+                  kryton_session: str = Cookie(None)):
+    if not logged_in(kryton_session):
+        return RedirectResponse("/prihlasit", status_code=303)
+    db.delete_metric(metric_id)
+    return RedirectResponse(_bezpecne_zpet(zpet), status_code=303)
 
 
 @app.get("/stats")
