@@ -155,15 +155,92 @@ jako proměnné), nikde žádná zabudovaná znalost Backblaze, a v databázi
 u dokumentu musí být uložený i **profil úložiště**, ne jen klíč objektu —
 jinak po migraci nepůjde poznat, kde který originál leží.
 
-### Otevřené otázky
-2. Kam se ukládá **vytažený text**? Do markdown stromu (znovupoužije celou
-   pipeline, ale text z PDF se tím dostane do git repa poznámek), nebo mimo
-   něj do vlastního úložiště?
-3. Kdo dělá extrakci a kde? PDF a DOCX potřebují knihovny navíc a Kryton má
-   `MemoryMax=800M`. Velký sken by ho mohl položit.
-4. Limity: maximální velikost souboru, počet stránek, chování u PDF, které
-   je jen obrázek (bez textové vrstvy) — OCR je mimo zadání („jen textové
-   dokumenty"), ale uživatel to nahraje a musí dostat srozumitelnou odpověď.
-5. Deduplikace a verze: co když se tentýž soubor nahraje dvakrát, nebo
-   v novější verzi?
-6. Co se stane při smazání — mizí i objekt na S3?
+### Analýza (2026-08-09) — k odsouhlasení před implementací
+
+#### Kam s vytaženým textem
+
+| | co to je | dopad |
+|---|---|---|
+| A | zapsat `.md` přímo do `MARKDOWN_ROOT` | text z PDF se každých 15 min pushne na GitHub, repo poznámek nabobtná |
+| **B** | **`_uploads/` pod `MARKDOWN_ROOT` + řádek v `.gitignore`** | **nulová změna pipeline, text zůstane na brainu** |
+| C | vlastní kořen nebo jen DB, mimo markdown model | největší zásah, přijdeme o inkrementální reindex podle hashe zadarmo |
+
+**Doporučuji B a není to odhad — je na to precedens přímo v repu.**
+`.gitignore` poznámek už dnes obsahuje `_scale/`, tedy 975 dokumentů
+zátěžového korpusu leží pod `MARKDOWN_ROOT`, řádně se indexují a na GitHub
+nejdou. `_scan()` v `indexer.py` prochází `root.rglob("*.md")` a `source_path`
+skládá jako cestu relativní ke kořeni, takže podadresář vezme sám od sebe.
+
+**Důsledek, který je potřeba vyslovit nahlas:** co je v `.gitignore`, to
+`brain-markdown-sync` nezálohuje. Originály budou na S3, ale *vytažený text*
+by existoval jen na brainu. Buď to vědomě přijmeme (text je z originálu
+kdykoliv obnovitelný), nebo mu dáme vlastní zálohu.
+
+#### Extrakce textu
+
+Kryton má RSS 79 MB při `MemoryMax=800M`, tedy ~720 MB rezervy; na stroji
+je volných 12 GB RAM a 36 GB disku. Místo na to je.
+
+- **MD, TXT** — bez nové závislosti. Pozor na kódování: český `.txt` bývá
+  cp1250, ne UTF-8, a špatně odhadnuté kódování se do indexu propíše tiše.
+- **PDF** — `pypdf`, čistě pythonní, čte po stránkách, takže paměť roste
+  s jednou stránkou, ne s celým souborem.
+- **DOCX** — je to ZIP s XML. Dá se rozebrat přes `zipfile` + `xml.etree`
+  ze standardní knihovny a ušetřit `python-docx` i jeho `lxml`.
+
+**PDF bez textové vrstvy (sken) musí skončit srozumitelnou hláškou.** OCR je
+mimo zadání („jen textové dokumenty"), ale uživatel takový soubor nahraje —
+poznat to jde podle nepoměru mezi počtem stránek a množstvím vytěženého textu.
+
+#### Originál na S3
+
+- Klíč **odvozený z obsahu**: `originals/<sha256>` — dvojí nahrání téhož
+  souboru je tím zadarmo a bez duplicit.
+- Do `x-amz-meta-*` původní název a hash; ověřeno, že B2 metadata drží.
+- Vazba v `retrieval.document.meta` (jsonb, existuje):
+  `{"storage": {"profile", "bucket", "key", "sha256", "size", "mime",
+  "original_name"}}`.
+
+#### Výměna endpointu a migrace
+
+Požadavek, ne možnost, takže hned od začátku:
+
+- konfigurace jako **profily úložiště** (název → endpoint, region, bucket,
+  klíče), aktivní profil se vybírá proměnnou;
+- `meta.storage.profile` u každého dokumentu, jinak po migraci nepůjde
+  poznat, kde který originál leží;
+- migrační skript: kopie profil A → B, ověření podle hashe, pak teprve úklid v A;
+- **dostupnost se testuje `list_objects_v2` nad bucketem, ne `ListBuckets`
+  ani `head_bucket`** — klíč je omezený na jeden bucket a ty operace nesmí.
+
+#### Rizika, která chci pojmenovat předem
+
+1. **Mazání.** Klíč odvozený z obsahu znamená, že jeden objekt může patřit
+   víc dokumentům. Mazat originál při smazání dokumentu jde jen s počítáním
+   odkazů. Návrh: zpočátku ze S3 nemazat vůbec, originály jsou archiv.
+2. **Kódování TXT** — tichá chyba, viz výš.
+3. **Zip bomba v DOCX** a PDF s desetitisíci stránkami → tvrdé stropy na
+   velikost souboru i počet stránek.
+4. **Název souboru od uživatele** → stejná ochrana cest jako `core.safe_path`.
+5. `_uploads/` není v gitu, tedy ani v záloze.
+
+#### Návrh etap
+
+| etapa | obsah | proč takhle |
+|---|---|---|
+| 1 | MD + TXT, S3, `meta.storage`, UI pro nahrání | projde celá cesta bez jediné nové závislosti |
+| 2 | PDF přes `pypdf` | přidá závislost, ale cesta je už ověřená |
+| 3 | DOCX přes `zipfile` + `xml.etree` | bez `lxml` |
+| 4 | migrační skript mezi profily | až bude co migrovat |
+
+### Otevřené otázky k rozhodnutí
+
+1. ~~Jaké S3?~~ — Backblaze B2, ověřeno.
+2. ~~Kam s vytaženým textem?~~ — návrh B, k odsouhlasení.
+3. ~~Kdo dělá extrakci?~~ — Kryton, rezerva paměti stačí.
+4. **Mazat originál na S3 při smazání dokumentu?** Návrh: ne, jen odpojit.
+5. **Zálohovat vytažený text**, když `_uploads/` bude mimo git?
+6. **Stropy** na velikost souboru a počet stránek?
+7. **`trust_level` nahraných dokumentů** — stejná důvěra jako vlastní
+   poznámky, nebo nižší? Propisuje se do hledání přes `max_trust`.
+8. **Etapy** — jít po etapách 1–4, nebo rovnou všechny formáty naráz?
