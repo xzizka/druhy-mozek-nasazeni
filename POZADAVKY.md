@@ -103,7 +103,31 @@ databázi. Pouštěj ji, když se sáhne na `analytics.py`.
 
 ## P2 — Nahrávání dokumentů, text do DB, originály na S3
 
-**Stav: ZAZNAMENÁNO (2026-08-09)**
+**Stav: ETAPA 1 HOTOVA (2026-08-09)** — md a txt nasazeno a ověřeno živě.
+Etapy 2–4 (PDF, DOCX, migrace) čekají.
+
+Rozhodnuto 2026-08-09: text do `_uploads/` pod `MARKDOWN_ROOT` s řádkem
+v `.gitignore`; zálohu vytaženého textu neřešíme, je obnovitelný z originálu;
+nahrané dokumenty mají nižší důvěru než vlastní poznámky; jde se po etapách.
+
+**Dvě věci vyšly jinak, než analýza předpokládala** — obojí se ukázalo až
+při čtení kódu:
+
+1. **Mapa na S3 je v tabulce `upload` v databázi Krytona, ne
+   v `retrieval.document.meta`.** Do toho sloupce indexer nikdy nic nezapisuje
+   a Kryton do databáze retrievalu psát nesmí (má tam jen SELECT přes
+   `platform_ro`). Pro migraci je to navíc výhodnější: `UPDATE` řádků místo
+   přepisu frontmatteru ve stovkách souborů a reindexu.
+2. **`trust_level` nebyl per-dokument**, byla to jediná globální hodnota
+   z configu. Doplněno čtení `trust:` z frontmatteru (`_resolve_trust`
+   v indexeru) a `upsert_document` ho nově aktualizuje i při konfliktu —
+   jinak by změna nikdy neprošla.
+
+Ověřeno živě: soubor v cp1250 s diakritikou → kódování rozpoznáno,
+`_uploads/zkouska-nahravani-<hash>.md` s `trust: 1`, originál na S3 pod
+`originals/<sha256>.txt`, jazyk detekován `cs`, vyhledávání dokument našlo
+první (rerank 0,852) a **`max_trust=0` ho správně vyřadilo**. `git check-ignore`
+potvrdil, že soubor do repozitáře poznámek nejde. Po testu uklizeno.
 
 Zadání, jak bylo formulováno:
 
