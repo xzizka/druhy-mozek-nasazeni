@@ -79,12 +79,39 @@ SYSTEM = (
     "Za každým tvrzením uveď odkaz na zdroj ve tvaru [1], [2] podle čísel "
     "úryvků níže.\n"
     "Když kontext na otázku neodpovídá, řekni to přímo — nedomýšlej si. "
-    "Je lepší přiznat, že v poznámkách odpověď není, než ji vymyslet."
+    "Je lepší přiznat, že v poznámkách odpověď není, než ji vymyslet.\n"
+    "Předchozí zprávy konverzace slouží jen k pochopení, na co se uživatel "
+    "ptá teď. Nejsou zdrojem faktů — ta ber výhradně z úryvků."
 )
 
 
-def answer(query: str, hits: list[dict]) -> tuple[str, str, int]:
-    """Vrátí (odpověď, model, latence_ms)."""
+def history_messages(prior: list[dict]) -> list[dict]:
+    """Předchozí tahy konverzace do formátu chat completions.
+
+    Ořezává se dvakrát: počtem zpráv i délkou každé z nich. Odpovědi
+    reasoning modelu bývají dlouhé a bez stropu by kontext rostl s každým
+    tahem, dokud by nepřerostl rozpočet klíče.
+    """
+    out = []
+    for m in (prior or [])[-config.HISTORY_MESSAGES:]:
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        if len(content) > config.HISTORY_CHARS:
+            content = content[:config.HISTORY_CHARS] + " […]"
+        out.append({"role": m["role"], "content": content})
+    return out
+
+
+def answer(query: str, hits: list[dict],
+           prior: list[dict] | None = None) -> tuple[str, str, int]:
+    """Vrátí (odpověď, model, latence_ms).
+
+    `prior` jsou předchozí zprávy konverzace. Pozor na hranici: slouží jen
+    generování odpovědi. Vyhledávání dostává surový text dotazu, takže
+    u doplňujícího dotazu bez podstatného jména („a proč?") se sice model
+    zorientuje, ale chunky se dohledávají podle té krátké fráze.
+    """
     ctx = "\n\n".join(
         f"[{i+1}] {h['source_path']}"
         + (f" — {h['heading_path']}" if h.get("heading_path") else "")
@@ -93,14 +120,17 @@ def answer(query: str, hits: list[dict]) -> tuple[str, str, int]:
     if not ctx:
         return ("V poznámkách jsem k tomu nic nenašel.", "", 0)
 
+    msgs = [{"role": "system", "content": SYSTEM}]
+    msgs += history_messages(prior)
+    msgs.append({"role": "user",
+                 "content": f"Úryvky z poznámek:\n\n{ctx}\n\nOtázka: {query}"})
+
     t0 = time.time()
     r = httpx.post(
         config.LITELLM_URL.rstrip("/") + "/v1/chat/completions",
         headers={"Authorization": f"Bearer {config.LITELLM_API_KEY}"},
         json={"model": config.ANSWER_MODEL,
-              "messages": [{"role": "system", "content": SYSTEM},
-                           {"role": "user",
-                            "content": f"Úryvky z poznámek:\n\n{ctx}\n\nOtázka: {query}"}],
+              "messages": msgs,
               "max_tokens": config.ANSWER_MAX_TOKENS},
         timeout=config.ANSWER_TIMEOUT)
     ms = int((time.time() - t0) * 1000)

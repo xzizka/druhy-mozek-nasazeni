@@ -23,7 +23,7 @@ interní most za opnsense bez fyzického portu a WAN→LAN se neroutuje.
 | LiteLLM | **healthy**, startuje při bootu | 4000 | 1,26 GB |
 | Infinity (bge-m3 + bge-reranker-**v2-m3**) | **healthy**, startuje při bootu | 7997 | 4,39 GB RSS |
 | Retrieval Service (Python) | **healthy**, startuje při bootu | 8080 (interní) | ~90 MB |
-| Kryton | quadlet zapsán, obraz neexistuje | — | — |
+| Kryton | zdrojáky, obraz i secrety hotové; unit zatím nespuštěn | 3001 | (limit 800M) |
 
 Kontejner: 6 jader, **18432 MB RAM** (navýšeno z 13312 MB), swap 2048 MB,
 rootfs 64 GB, unprivileged, `nesting=1`, `onboot=1`.
@@ -171,10 +171,22 @@ nepoužívá; drží se jen kvůli reprodukovatelnosti `scripts/06-eval-reranker
   ve frontmatteru, a když chybí, určí ho `cheap`. Dotazová strana předává
   `p_ts_config`. Podrobnosti a měření v `PIPELINE.md`, test
   `scripts/09-multilang-test.py`.
-- **Kryton** — v ZIPu není obraz ani zdrojový kód a nebyl napsán. Quadlet je
-  připravený a bez `[Install]`, port 3001 je v něm, ale nic za ním neposlouchá.
+- **Kryton je napsaný** — zdrojáky v `kryton/`, obraz `localhost/kryton:latest`
+  postavený 2026-08-06, secrety, DB `kryton` i quadlet s `[Install]` na místě.
+  FastAPI, server-rendered HTML se šablonami inline, žádný build step.
+  Endpointy: `/healthz`, `/stats`, `/prihlasit`, `/odhlasit`, `/`, `/dotaz`,
+  `/konverzace/{id}`, `/hodnoceni`, `/zachytit`, `/historie`, `/inbox`.
 
-  **Kontrakt pro ten kód je ale ověřený** — `scripts/05-smoke-retrieval.py` projde
+  **Do 2026-08-09 ale nebyl ANI JEDNOU spuštěný**, a první běh to hned ukázal:
+  `page()` prohnala už vyrenderované tělo stránky druhým průchodem šablony
+  s `autoescape=True`, takže se každá stránka zobrazovala jako vlastní zdroják
+  (`<h1>Nadpis</h1>` jako viditelný text). Opraveno přes `markupsafe.Markup`;
+  escapování dat zůstává, protože ho dělá vnitřní render. **Poučení: obraz
+  postavený a nasazený neznamená ověřený.** Regresi hlídá
+  `scripts/13-smoke-kryton.py` — projde všechny routy s odstubovanou DB,
+  retrievalem a LLM, takže nepotřebuje běžící stack.
+
+  **Kontrakt pro ten kód je ověřený** — `scripts/05-smoke-retrieval.py` projde
   celou cestu Infinity → `halfvec(1024)` → generované sloupce → `hybrid_search`
   → RRF fúze. Dvě věci, které z toho pro retrieval kód vyplývají:
 
@@ -421,17 +433,29 @@ body 6 a 7 výš.
 
 ## Doporučené další kroky
 
-1. **Napsat Krytona** — jediná zbývající velká věc. Retrieval Service hotový
-   a nasazený, návrh pipeline i naměřené chování v **`PIPELINE.md`**.
+1. ~~Napsat Krytona~~ — **napsaný a otestovaný, zbývá ho poprvé spustit.**
+   Kód v `kryton/`, smoke test `scripts/13-smoke-kryton.py` (34 kontrol).
    Kontrakt retrievalu upraven pro Python: místo PDO DSN
    (`pgsql:host=…;dbname=…`, což je PHP) je teď jeden secret
    `retrieval_database_url` s libpq URL, stejně jako u litellm a kryton.
 
-   **Co z vícejazyčnosti pro Krytona plyne:** `POST /search` bere volitelné
-   `lang` (`cs|en|de|la`). Posílat ho nemusí — když chybí, určí jazyk `cheap`
-   ve stejném volání jako klíčová slova. Když ho ale Kryton zná z kontextu
-   konverzace, ať ho pošle: je to spolehlivější a odpověď pak nese
-   `lang_source: "request"`. Neznámý kód vrací 422.
+   Postup prvního spuštění (obraz je z 2026-08-06, tedy **před** opravou
+   escapování — musí se přestavět):
+
+       git -C /root/deploy pull
+       podman build --network=host -t localhost/kryton:latest \
+           -f /root/deploy/kryton/Containerfile /root/deploy/kryton
+       systemctl start kryton && systemctl status kryton
+
+   **Vícejazyčnost:** `POST /search` bere volitelné `lang` (`cs|en|de|la`).
+   Kryton ho **záměrně neposílá** — rozhodnuto 2026-08-09 nechat detekci na
+   retrievalu. Když `rewrite` běží, jazyk určí `cheap` ve stejném volání jako
+   klíčová slova, takže to nestojí volání navíc. Cena toho rozhodnutí je, že
+   dotazy i zachycené poznámky spadají pod denní strop aliasu `cheap`
+   (50/den) a jeho selhání je tiché — propadne na `DEFAULT_LANG=cs`.
+   Kdyby to začalo vadit, stačí do `core.search()` doplnit `lang` a do
+   `core.capture()` frontmatter `lang:`; odpověď pak nese `lang_source:
+   "request"`. Neznámý kód vrací 422.
 2. ~~Zvážit výměnu rerankeru za `bge-reranker-v2-m3`~~ — hotovo a změřeno,
    top-1 přesnost 57 % → 100 %. Zbývá rozhodnout `RERANK_TOP_K`: 20 znamená
    3,8 s na dotaz, 10 asi 2,0 s.

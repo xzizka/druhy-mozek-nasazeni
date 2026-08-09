@@ -21,6 +21,13 @@ ANSWER_TIMEOUT = float(os.environ.get("ANSWER_TIMEOUT", "180"))
 # Kolik chunků poslat modelu jako kontext. Retrieval vrací RESULT_LIMIT=8.
 CONTEXT_CHUNKS = int(os.environ.get("CONTEXT_CHUNKS", "8"))
 
+# Kolik předchozích zpráv konverzace přiložit k doplňujícímu dotazu.
+# 6 = tři dvojice otázka/odpověď. Strop je tu proto, že odpovědi bývají
+# dlouhé a bez něj by kontext rostl každým tahem, až by přerostl
+# ANSWER_MAX_TOKENS i rozpočet klíče.
+HISTORY_MESSAGES = int(os.environ.get("HISTORY_MESSAGES", "6"))
+HISTORY_CHARS = int(os.environ.get("HISTORY_CHARS", "1500"))
+
 # Heslo z podman secretu. Bez něj se aplikace odmítne spustit — port 3001
 # je publikovaný na 0.0.0.0 a firewall pouští celý segment 10.20.0.0/24,
 # takže běh bez autentizace by znamenal poznámky otevřené celému homelabu.

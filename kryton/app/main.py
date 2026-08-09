@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import Cookie, FastAPI, Form, Request
+from fastapi import Cookie, FastAPI, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from jinja2 import Environment
+from markupsafe import Markup
 
 from . import config, core, db
 
@@ -48,7 +49,13 @@ pre{white-space:pre-wrap;font:inherit;margin:0}
 
 
 def page(title: str, body_html: str) -> HTMLResponse:
-    return HTMLResponse(env.from_string(BASE).render(t=title, body=body_html))
+    # Markup je tu POVINNÝ, ne kosmetika. `body_html` je výstup render(),
+    # tedy HTML, které Jinja s autoescape=True už jednou proescapovala.
+    # Bez Markup ho vnější šablona escapuje podruhé a v prohlížeči se místo
+    # stránky objeví její zdroják — `<h1>Nadpis</h1>` jako viditelný text.
+    # Bezpečné to je právě proto, že vnitřní render escapuje všechna
+    # dosazovaná data; značky pocházejí výhradně ze šablon v tomhle souboru.
+    return HTMLResponse(env.from_string(BASE).render(t=title, body=Markup(body_html)))
 
 
 def render(tpl: str, **kw) -> str:
@@ -146,7 +153,9 @@ CONV = """<h1>{{ title or "Konverzace" }}</h1>
 {% endfor %}
 <form method="post" action="/dotaz"><input type="hidden" name="conversation_id" value="{{ cid }}">
 <p><textarea name="query" rows="2" placeholder="Doplňující dotaz…"></textarea></p>
-<button>Zeptat se</button></form>"""
+<div class="row"><button>Zeptat se</button>
+<label><input type="checkbox" name="rewrite" value="1" checked style="width:auto"> přepis dotazu přes LLM</label></div>
+</form>"""
 
 
 @app.get("/konverzace/{cid}", response_class=HTMLResponse)
@@ -167,12 +176,15 @@ def ask(query: str = Form(...), conversation_id: str = Form(None),
     if not q:
         return RedirectResponse("/", status_code=303)
 
+    # Historie se čte PŘED zápisem nové otázky — ta jde modelu zvlášť,
+    # spolu s úryvky, a nesmí v kontextu figurovat dvakrát.
+    prior = db.messages(conversation_id) if conversation_id else []
     cid = conversation_id or str(db.new_conversation(q))
     db.add_message(cid, "user", q)
     try:
         res = core.search(q, rewrite=bool(rewrite))
         hits = res["results"]
-        text, model, ms = core.answer(q, hits)
+        text, model, ms = core.answer(q, hits, prior=prior)
         cits = [{"source_path": h["source_path"], "heading_path": h.get("heading_path"),
                  "chunk_id": h["chunk_id"], "rerank_score": h.get("rerank_score")}
                 for h in hits]
@@ -256,7 +268,12 @@ def inbox_done(item_id: int = Form(...), kryton_session: str = Cookie(None)):
 
 
 @app.get("/stats")
-def stats():
+def stats(kryton_session: str = Cookie(None)):
+    # Na rozdíl od /healthz tohle za autentizaci patří: PublishPort je
+    # 0.0.0.0:3001 a firewall pouští celý segment 10.20.0.0/24, takže bez
+    # kontroly by kdokoliv v homelabu viděl, kolik toho mám v poznámkách.
+    if not logged_in(kryton_session):
+        return RedirectResponse("/prihlasit", status_code=303)
     return db.stats()
 
 
