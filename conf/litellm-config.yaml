@@ -74,14 +74,47 @@ model_list:
   # -------------------------------------------------------------------
   - model_name: cheap
     litellm_params:
-      # ZMENA: puvodne openrouter/google/gemini-2.5-flash, pote
-      # nvidia/nemotron-3-ultra-550b-a55b:free. Nemotron odstranen prave
-      # z tohoto aliasu zamerne: na uloze "titulek a tagy", ktera je podle
-      # navrhu hlavni prace `cheap`, ve 2 z 6 volani odpovedel anglickou
-      # uvahou ("The user wants a title...") misto vysledku. V automatizovane
-      # indexacni pipeline se takova odpoved ulozi bez povsimnuti.
-      # Zduvodneni volby gemma-4-26b je u aliasu workhorse.
-      model: openrouter/google/gemma-4-26b-a4b-it:free
+      # ZMENA 2026-08-09: gemma-4-26b-a4b-it:free -> ling-2.6-flash (PLACENY).
+      #
+      # Duvod neni cena, ale denni strop. `:free` varianty spadaji pod free
+      # tier OpenRouteru: 50 pozadavku/den pod 10 nakoupenymi kredity, 20/min.
+      # A `REWRITE_MODEL` v retrievalu je `cheap`, takze kvotu pali KAZDE
+      # hledani, ne jen indexace - padesat dotazu denne a konec. Pri vycerpani
+      # navic `detect_language()` propadne na DEFAULT_LANG=cs uplne potichu,
+      # cimz se 2026-08-08 zaindexovalo 5 dokumentu se spatnym jazykem.
+      # Placene modely denni strop nemaji.
+      #
+      # ling-2.6-flash je zaroven NEJLEVNEJSI placeny model v katalogu
+      # (378 placenych, $0,010/M vstup, $0,030/M vystup) - asi 7,7x levnejsi
+      # nez placena gemma. Detekce jazyka posila ~400 tokenu, takze jedno
+      # volani vyjde na ~0,0004 c.
+      #
+      # Overeno 2026-08-09 skutecnymi prompty z rewrite.py, 30 volani:
+      #   detekce jazyka cs/en/de/la   20/20
+      #   prepis dotazu vcetne pasti   10/10  (maintenance_work_mem nerozbity,
+      #                                       anglicke "faster" nenormalizovano)
+      #   latence  median 0,88 s, max 1,41 s  (gemma 1,44 s / 5,09 s)
+      # Odmitnuti kandidati: granite-4.0-h-micro urcil cestinu jako anglictinu,
+      # ling-3.0-flash a qwen3.7-flash vraceji prazdny content (reasoning
+      # modely utrati max_tokens na uvahu - tataz past jako u big-pickle).
+      model: openrouter/inclusionai/ling-2.6-flash
+      api_key: os.environ/OPENROUTER_API_KEY
+      timeout: 60
+
+  # -------------------------------------------------------------------
+  # Zaloha pro `cheap`. Placena gemma - tedy presne ten model, ktery
+  # `cheap` do 2026-08-09 pouzival, jen bez `:free` a tim i bez stropu.
+  #
+  # POZOR, tohle NEODPORUJE zasade nize u fallbacku, ze `cheap` radeji
+  # spadne nahlas. Ta zasada mirila na `backstop`: gpt-oss-20b vratil
+  # cesky spravne, ale obsahove smyslenou odpoved, a verohodny nesmysl
+  # je pro index horsi nez selhani. Gemma je proti tomu na teto uloze
+  # zmerena (20/20 detekce, 10/10 prepis) - je to znama velicina, ne
+  # generator pravdepodobne vypadajiciho nesmyslu.
+  # -------------------------------------------------------------------
+  - model_name: cheap-fallback
+    litellm_params:
+      model: openrouter/google/gemma-4-26b-a4b-it
       api_key: os.environ/OPENROUTER_API_KEY
       timeout: 60
 
@@ -142,8 +175,21 @@ router_settings:
   #
   #    `reasoning` fallback ma, protoze jde o interaktivni dotazy, kde
   #    spatnou odpoved uvidis.
+  #
+  # DOPLNENO 2026-08-09: `cheap` uz fallback MA, ale jen na `cheap-fallback`,
+  # coz je placena gemma - model na teto uloze zmereny (20/20 detekce,
+  # 10/10 prepis). Bod 2) vyse tim porusen neni: mluvi o `backstop`, ktery
+  # umi vratit verohodne vypadajici nesmysl. Retez zamerne NEPOKRACUJE na
+  # `backstop`; kdyz selze i gemma, `cheap` porad spadne nahlas.
+  #
+  # POZOR: fallback na jiny model_group vyzaduje, aby ho virtual key smel
+  # volat. Klic `retrieval-service` mel puvodne models=["cheap"] a fallback
+  # by se o to tise rozbil - musi tam byt i "cheap-fallback".
+  # `workhorse` fallback dal nema: dela jinou ulohu (titulek a tagy),
+  # na ktere ling-2.6-flash zmereny NENI.
   fallbacks:
     - reasoning: ["workhorse", "backstop"]
+    - cheap: ["cheap-fallback"]
   allowed_fails: 2
   cooldown_time: 30
 
@@ -194,10 +240,12 @@ general_settings:
 #   curl -X POST http://litellm:4000/key/generate \
 #     -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
 #     -d '{"key_alias":"retrieval-service",
-#          "models":["cheap"],
+#          "models":["cheap","cheap-fallback"],
 #          "max_budget":5, "budget_duration":"30d",
 #          "rpm_limit":60}'
 #
 # Retrieval service má vědomě jen "cheap" - nemá důvod volat reasoning
 # model a omezení modelů je nejjednodušší forma damage controlu.
+# "cheap-fallback" tam být MUSÍ, jinak se fallback z router_settings
+# neprovede: klíč cílový model_group nesmí volat a LiteLLM to odmítne.
 # =====================================================================
