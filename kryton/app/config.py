@@ -69,3 +69,29 @@ ANALYTICS_DATABASE_URL = os.environ.get("ANALYTICS_DATABASE_URL", "")
 ANALYTICS_MODEL = os.environ.get("ANALYTICS_MODEL", "reasoning")
 ANALYTICS_SQL_TIMEOUT_MS = int(os.environ.get("ANALYTICS_SQL_TIMEOUT_MS", "10000"))
 ANALYTICS_MAX_ROWS = int(os.environ.get("ANALYTICS_MAX_ROWS", "200"))
+
+# ---------------------------------------------------------------------------
+# Nahrávání dokumentů (P2, etapa 1: md a txt)
+# ---------------------------------------------------------------------------
+# Podadresář pod MARKDOWN_ROOT pro text vytažený z nahraných souborů.
+# Patří do `.gitignore` repozitáře poznámek — stejný vzorec jako `_scale/`,
+# takže se text nesynchronizuje na GitHub. Indexer ho vezme sám, protože
+# `_scan()` prochází `root.rglob("*.md")` relativně ke kořeni.
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "_uploads")
+UPLOAD_MAX_BYTES = int(os.environ.get("UPLOAD_MAX_BYTES", str(50 * 1024 * 1024)))
+
+# 0 = vlastní poznámka, 1 = importované, 2 = automatický sync z venku
+# (komentář u retrieval.document). Filtr je `trust_level <= p_max_trust`,
+# takže vyšší číslo = menší důvěra. Nahrané dokumenty jsou „importované".
+UPLOAD_TRUST = int(os.environ.get("UPLOAD_TRUST", "1"))
+
+# Profil úložiště. Jméno se ukládá ke každému nahranému souboru, aby po
+# migraci na jiný endpoint šlo poznat, kde který originál leží.
+S3_PROFILE = os.environ.get("S3_PROFILE", "backblaze")
+S3_ENDPOINT = os.environ.get("S3_ENDPOINT", "")
+S3_BUCKET = os.environ.get("S3_BUCKET", "")
+# Prázdné = odvodí se z endpointu (u Backblaze je region v hostiteli).
+S3_REGION = os.environ.get("S3_REGION", "")
+S3_ACCESS_KEY_ID = os.environ.get("S3_ACCESS_KEY_ID", "")
+S3_SECRET_ACCESS_KEY = os.environ.get("S3_SECRET_ACCESS_KEY", "")
+S3_KEY_PREFIX = os.environ.get("S3_KEY_PREFIX", "originals/")

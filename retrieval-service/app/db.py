@@ -134,7 +134,8 @@ def upsert_document(source_path: str, title: str, content_hash: bytes,
             "VALUES (%s, %s, %s, %s, %s, %s, 0, now()) "
             "ON CONFLICT (source_path) DO UPDATE SET "
             "  title = EXCLUDED.title, content_hash = EXCLUDED.content_hash, "
-            "  lang = EXCLUDED.lang, indexed_at = NULL, updated_at = now() "
+            "  lang = EXCLUDED.lang, trust_level = EXCLUDED.trust_level, "
+            "  indexed_at = NULL, updated_at = now() "
             "RETURNING id",
             (uuid.uuid4(), source_path, title, content_hash, trust_level,
              lang)).fetchone()

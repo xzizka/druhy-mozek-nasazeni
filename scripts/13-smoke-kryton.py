@@ -170,13 +170,43 @@ db.metrics_for_conversation = lambda cid: [
     m for m in _metrics if m["conversation_id"] == cid and not m["pinned_at"]]
 db.pinned_metrics = lambda: [dict(m) for m in _metrics if m["pinned_at"]]
 
+# --- stub úložiště (P2) ------------------------------------------------
+from app import ingest, storage  # noqa: E402
+
+_s3 = {}
+storage.enabled = lambda: True
+storage.exists = lambda key: key in _s3
+
+
+def _put_original(data, key, original_name, mime):
+    _s3[key] = data
+    return key
+
+
+storage.put_original = _put_original
+
+_uploads = []
+
+
+def _add_upload(**kw):
+    kw = dict(kw)
+    kw["created_at"] = datetime.now()
+    kw["id"] = len(_uploads) + 1
+    _uploads[:] = [u for u in _uploads if u["source_path"] != kw["source_path"]]
+    _uploads.append(kw)
+    return kw["id"]
+
+
+db.add_upload = _add_upload
+db.uploads = lambda limit=200: list(reversed(_uploads))
+
 from fastapi.testclient import TestClient  # noqa: E402
 from app import main  # noqa: E402
 
 c = TestClient(main.app)
 
 print("== bez přihlášení ==")
-for path in ["/", "/historie", "/inbox", "/zachytit", "/korpus"]:
+for path in ["/", "/historie", "/inbox", "/zachytit", "/korpus", "/nahrat"]:
     r = c.get(path, follow_redirects=False)
     check(f"GET {path} přesměruje na přihlášení",
           r.status_code == 303 and r.headers.get("location") == "/prihlasit",
@@ -415,6 +445,97 @@ r = fresh.post("/konverzace/smazat", data={"conversation_id": CID},
                follow_redirects=False)
 check("mazání vyžaduje přihlášení",
       r.headers.get("location") == "/prihlasit" and SMAZANO == [CID], repr(SMAZANO))
+
+print("== P2: kódování a formáty ==")
+check("utf-8 se pozná",
+      ingest.dekoduj("Příliš žluťoučký".encode("utf-8")) == ("Příliš žluťoučký", "utf-8"))
+_t, _e = ingest.dekoduj("Příliš žluťoučký".encode("cp1250"))
+check("český cp1250 se dekóduje správně", (_t, _e) == ("Příliš žluťoučký", "cp1250"),
+      "%r %s" % (_t, _e))
+
+for pripona, slovo in ((".pdf", "PDF"), (".docx", "Word")):
+    try:
+        ingest.extrahuj(b"data", "soubor" + pripona)
+        check("chystaný formát %s odmítne" % pripona, False, "prošel")
+    except ingest.IngestError as ex:
+        check("chystaný formát %s odmítne srozumitelně" % pripona,
+              slovo in str(ex) and "zatím" in str(ex), str(ex))
+for pripona in (".exe", ".jpg", ""):
+    try:
+        ingest.extrahuj(b"data", "soubor" + pripona)
+        check("nepodporovaná přípona %r odmítnuta" % pripona, False, "prošla")
+    except ingest.IngestError:
+        check("nepodporovaná přípona %r odmítnuta" % pripona, True)
+try:
+    ingest.extrahuj(b"   \n  ", "prazdny.txt")
+    check("soubor bez textu odmítnut", False, "prošel")
+except ingest.IngestError:
+    check("soubor bez textu odmítnut", True)
+
+print("== P2: klíč objektu a region ==")
+check("klíč objektu je odvozený z hashe",
+      storage.object_key("abc123", ".TXT") == "originals/abc123.txt",
+      storage.object_key("abc123", ".TXT"))
+_puv_ep, _puv_reg = storage.config.S3_ENDPOINT, storage.config.S3_REGION
+storage.config.S3_ENDPOINT = "https://s3.eu-central-003.backblazeb2.com"
+storage.config.S3_REGION = ""
+check("region se odvodí z endpointu", storage.region() == "eu-central-003",
+      storage.region())
+storage.config.S3_REGION = "rucne-zadany"
+check("ručně zadaný region má přednost", storage.region() == "rucne-zadany")
+storage.config.S3_ENDPOINT, storage.config.S3_REGION = _puv_ep, _puv_reg
+
+print("== P2: celý tok nahrání ==")
+DATA = "# Poznámka\n\nObsah nahraného dokumentu.\n".encode("utf-8")
+res = ingest.uloz(DATA, "Můj Dokument.md")
+check("text jde do _uploads/", res["source_path"].startswith("_uploads/"),
+      res["source_path"])
+cesta = Path(MD, res["source_path"])
+check("markdown soubor vznikl", cesta.exists(), str(cesta))
+obsah = cesta.read_text(encoding="utf-8")
+check("frontmatter nese trust pro importované", "trust: 1" in obsah, obsah[:60])
+check("frontmatter nepředjímá jazyk", "lang:" not in obsah)
+check("název souboru je bez diakritiky", "muj-dokument" in res["source_path"],
+      res["source_path"])
+check("originál je na S3 pod hashem obsahu",
+      res["s3_key"] == "originals/%s.md" % res["sha256"], res["s3_key"])
+check("originál se opravdu uložil", _s3.get(res["s3_key"]) == DATA)
+check("zapsáno do evidence", len(_uploads) == 1 and _uploads[0]["s3_profile"])
+
+res2 = ingest.uloz(DATA, "Můj Dokument.md")
+check("stejný obsah nevytvoří druhý objekt",
+      res2["s3_key"] == res["s3_key"] and res2["source_path"] == res["source_path"]
+      and len(_s3) == 1 and len(_uploads) == 1)
+
+_puv_max = core.config.UPLOAD_MAX_BYTES
+core.config.UPLOAD_MAX_BYTES = 16
+try:
+    ingest.uloz(b"x" * 100, "velky.txt")
+    check("strop velikosti se vynutí", False, "prošlo")
+except ingest.IngestError as ex:
+    check("strop velikosti se vynutí", "strop" in str(ex), str(ex))
+core.config.UPLOAD_MAX_BYTES = _puv_max
+
+print("== P2: stránka nahrávání ==")
+r = c.get("/nahrat")
+check("GET /nahrat", r.status_code == 200 and "Nahrát dokument" in r.text)
+check("výpis ukáže nahraný soubor", "Můj Dokument.md" in r.text)
+
+r = c.post("/nahrat", files={"soubor": ("pokus.txt", "Nějaký český text".encode("cp1250"),
+                                        "text/plain")})
+check("POST /nahrat uloží soubor", r.status_code == 200 and "Nahráno jako" in r.text,
+      str(r.status_code))
+check("stránka hlásí použité kódování", "cp1250" in r.text)
+
+r = c.post("/nahrat", files={"soubor": ("sken.pdf", b"%PDF-1.4 ...",
+                                        "application/pdf")})
+check("PDF odmítne srozumitelně a nespadne",
+      r.status_code == 200 and "zatím neumím" in r.text, str(r.status_code))
+
+fresh3 = TestClient(main.app)
+r = fresh3.post("/nahrat", files={"soubor": ("x.txt", b"data", "text/plain")},
+                follow_redirects=False)
+check("nahrávání vyžaduje přihlášení", r.headers.get("location") == "/prihlasit")
 
 print("== ochrana cest ==")
 for bad in ["../mimo.md", "denik/../../mimo.md", ".git/config.md", "poznamka.txt"]:

@@ -87,6 +87,31 @@ CREATE TABLE IF NOT EXISTS metric (
 CREATE INDEX IF NOT EXISTS metric_pinned_ix ON metric (pinned_at)
     WHERE pinned_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS metric_conv_ix ON metric (conversation_id);
+
+-- Nahrané dokumenty (P2): mapa mezi textem v indexu a originálem na S3.
+--
+-- Proč tady a ne v `retrieval.document.meta`: ten sloupec sice existuje, ale
+-- indexer do něj nikdy nic nezapisuje a Kryton do databáze retrievalu psát
+-- nesmí (má tam jen SELECT přes platform_ro). Držet mapu tady je navíc
+-- výhodnější pro migraci mezi úložišti — je to UPDATE řádků, ne přepis
+-- frontmatteru ve stovkách souborů a reindex.
+--
+-- `s3_profile` je tu právě kvůli migraci: bez něj by po přepnutí endpointu
+-- nešlo poznat, který originál leží kde.
+CREATE TABLE IF NOT EXISTS upload (
+    id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    source_path   text NOT NULL UNIQUE,
+    original_name text NOT NULL,
+    mime          text,
+    size_bytes    bigint NOT NULL,
+    sha256        text NOT NULL,
+    s3_profile    text NOT NULL,
+    s3_bucket     text NOT NULL,
+    s3_key        text NOT NULL,
+    encoding      text,
+    created_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS upload_sha_ix ON upload (sha256);
 """
 
 
@@ -257,6 +282,38 @@ def update_metric_result(metric_id: int, cols, rows, fingerprint: str) -> None:
             "computed_at=now() WHERE id=%s",
             (json.dumps(cols or []), json.dumps(rows or []),
              fingerprint or "", metric_id))
+
+
+def add_upload(source_path: str, original_name: str, mime: str,
+               size_bytes: int, sha256: str, s3_profile: str, s3_bucket: str,
+               s3_key: str, encoding: str) -> int:
+    """Zapíše nahraný soubor. Opakované nahrání téhož obsahu i názvu vede
+    na stejný `source_path`, takže se řádek jen aktualizuje."""
+    with _pool.connection() as conn:
+        return conn.execute(
+            "INSERT INTO upload (source_path, original_name, mime, size_bytes, "
+            "  sha256, s3_profile, s3_bucket, s3_key, encoding) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            "ON CONFLICT (source_path) DO UPDATE SET "
+            "  original_name = EXCLUDED.original_name, mime = EXCLUDED.mime, "
+            "  size_bytes = EXCLUDED.size_bytes, sha256 = EXCLUDED.sha256, "
+            "  s3_profile = EXCLUDED.s3_profile, s3_bucket = EXCLUDED.s3_bucket, "
+            "  s3_key = EXCLUDED.s3_key, encoding = EXCLUDED.encoding, "
+            "  created_at = now() RETURNING id",
+            (source_path, original_name, mime, size_bytes, sha256,
+             s3_profile, s3_bucket, s3_key, encoding)).fetchone()[0]
+
+
+def uploads(limit: int = 200) -> list[dict]:
+    with _pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT id, source_path, original_name, mime, size_bytes, sha256, "
+            "       s3_profile, s3_bucket, s3_key, encoding, created_at "
+            "FROM upload ORDER BY created_at DESC LIMIT %s", (limit,)).fetchall()
+    return [{"id": r[0], "source_path": r[1], "original_name": r[2],
+             "mime": r[3], "size_bytes": r[4], "sha256": r[5],
+             "s3_profile": r[6], "s3_bucket": r[7], "s3_key": r[8],
+             "encoding": r[9], "created_at": r[10]} for r in rows]
 
 
 def stats() -> dict:

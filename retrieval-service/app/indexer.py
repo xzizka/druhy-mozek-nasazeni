@@ -155,6 +155,31 @@ def reindex() -> dict:
         _lock.release()
 
 
+def _resolve_trust(meta: dict) -> int:
+    """`trust:` z frontmatteru, jinak globální TRUST_LEVEL.
+
+    Podle komentáře u tabulky: 0 = vlastní poznámka, 1 = importované,
+    2 = automatický sync z venku. Filtr v `hybrid_search` je
+    `trust_level <= p_max_trust`, takže vyšší číslo znamená MENŠÍ důvěru.
+
+    Cizí hodnota se ignoruje místo pádu: CHECK document_trust_level_ck by
+    shodil INSERT a s ním celou indexaci kvůli překlepu v jednom souboru.
+    """
+    raw = meta.get("trust")
+    if raw is None:
+        return config.TRUST_LEVEL
+    try:
+        val = int(str(raw).strip())
+    except ValueError:
+        log.warning("neplatny trust %r ve frontmatteru, beru %s", raw,
+                    config.TRUST_LEVEL)
+        return config.TRUST_LEVEL
+    if not 0 <= val <= 2:
+        log.warning("trust %s mimo rozsah 0-2, beru %s", val, config.TRUST_LEVEL)
+        return config.TRUST_LEVEL
+    return val
+
+
 def _index_one(inf: Infinity, rel: str, sha: bytes, text: str,
                existing: dict | None, res: dict) -> None:
     # Frontmatter pryč PŘED chunkováním, jinak by se `lang: en` a spol. staly
@@ -164,8 +189,8 @@ def _index_one(inf: Infinity, rel: str, sha: bytes, text: str,
     doc_lang = _resolve_lang(rel, meta, body, existing, resumed, res)
     res["languages"][doc_lang] = res["languages"].get(doc_lang, 0) + 1
 
-    doc_id = db.upsert_document(rel, _title(rel, body), sha, config.TRUST_LEVEL,
-                                doc_lang)
+    doc_id = db.upsert_document(rel, _title(rel, body), sha,
+                                _resolve_trust(meta), doc_lang)
 
     # Recyklace: mapa content -> embedding ze starých chunků TÉHOŽ dokumentu.
     # Klíčem je obsah, ne ordinal — viz db.document_chunk_embeddings.

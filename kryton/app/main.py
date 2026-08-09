@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import Cookie, FastAPI, Form
+from fastapi import Cookie, FastAPI, File, Form, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from jinja2 import Environment
 from markupsafe import Markup
 
-from . import analytics, config, core, db
+from . import analytics, config, core, db, ingest, storage
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -46,7 +46,8 @@ th.n,td.n{text-align:right;font-variant-numeric:tabular-nums}
 tr.sum td,tr.sum th{border-top:2px solid #8886;border-bottom:none;font-weight:600}
 </style></head><body>
 <nav><a href="/"><b>Kryton</b></a><a href="/zachytit">Zachytit</a>
-<a href="/historie">Historie</a><a href="/inbox">Inbox</a><a href="/korpus">Korpus</a>
+<a href="/nahrat">Nahrát</a><a href="/historie">Historie</a>
+<a href="/inbox">Inbox</a><a href="/korpus">Korpus</a>
 <span style="flex:1"></span><a href="/odhlasit">Odhlásit</a></nav>
 {{ body }}
 </body></html>"""
@@ -85,9 +86,11 @@ def _startup():
                            "nespoustim se bez autentizace")
     db.init()
     analytics.init()
-    log.info("start: retrieval=%s litellm=%s model=%s analytika=%s",
+    log.info("start: retrieval=%s litellm=%s model=%s analytika=%s uloziste=%s",
              config.RETRIEVAL_URL, config.LITELLM_URL, config.ANSWER_MODEL,
-             "zapnuta" if analytics.enabled() else "vypnuta")
+             "zapnuta" if analytics.enabled() else "vypnuta",
+             ("%s/%s" % (config.S3_PROFILE, config.S3_BUCKET))
+             if storage.enabled() else "vypnuto")
 
 
 @app.on_event("shutdown")
@@ -305,6 +308,60 @@ def capture(text: str = Form(""), title: str = Form(""),
         return page("Zachytit", render(CAPTURE, saved=None))
     rel = core.capture(text, title.strip() or None)
     return page("Zachytit", render(CAPTURE, saved=rel))
+
+
+NAHRAT = """<h1>Nahrát dokument</h1>
+<p class="meta">Text se zaindexuje jako <b>importovaný</b> dokument
+(nižší důvěra než vlastní poznámky), originál se uloží na S3.
+Podporované formáty: markdown a prostý text. PDF a Word přijdou v další
+etapě. Strop {{ max_mb }} MB.</p>
+{% if not s3 %}<p class="err">Úložiště S3 není nakonfigurované — nahrávání
+je vypnuté.</p>{% endif %}
+{% if err %}<p class="err">{{ err }}</p>{% endif %}
+{% if ok %}<p class="msg" style="background:#0a05">Nahráno jako
+<code>{{ ok.source_path }}</code> — {{ ok.size }} B, kódování
+<b>{{ ok.encoding }}</b>, originál na S3 jako <code>{{ ok.s3_key }}</code>.</p>{% endif %}
+<form method="post" action="/nahrat" enctype="multipart/form-data">
+<p><input type="file" name="soubor" required></p>
+<button>Nahrát</button></form>
+{% if items %}<h2>Nahrané dokumenty</h2>
+<table><tr><th>soubor</th><th class="n">velikost</th><th>kódování</th><th>uloženo</th></tr>
+{% for u in items %}<tr>
+<td>{{ u.original_name }}<div class="meta"><code>{{ u.source_path }}</code></div></td>
+<td class="n">{{ (u.size_bytes / 1024) | round(1) }} kB</td>
+<td>{{ u.encoding }}</td>
+<td class="meta">{{ u.created_at.strftime("%d.%m. %H:%M") }} · {{ u.s3_profile }}</td>
+</tr>{% endfor %}</table>{% endif %}"""
+
+
+def _stranka_nahrat(err=None, ok=None):
+    return page("Nahrát", render(
+        NAHRAT, err=err, ok=ok, s3=storage.enabled(),
+        max_mb=int(config.UPLOAD_MAX_BYTES / 1e6), items=db.uploads(50)))
+
+
+@app.get("/nahrat", response_class=HTMLResponse)
+def upload_form(kryton_session: str = Cookie(None)):
+    if not logged_in(kryton_session):
+        return RedirectResponse("/prihlasit", status_code=303)
+    return _stranka_nahrat()
+
+
+@app.post("/nahrat", response_class=HTMLResponse)
+async def upload(soubor: UploadFile = File(...),
+                 kryton_session: str = Cookie(None)):
+    if not logged_in(kryton_session):
+        return RedirectResponse("/prihlasit", status_code=303)
+    try:
+        data = await soubor.read()
+        vysledek = ingest.uloz(data, soubor.filename or "")
+    except ingest.IngestError as e:
+        # Očekávaná chyba (formát, velikost, kódování) — patří uživateli.
+        return _stranka_nahrat(err="Nahrání se nepovedlo: %s" % e)
+    except Exception as e:
+        log.exception("nahrani selhalo")
+        return _stranka_nahrat(err="Nahrání selhalo: %s" % e)
+    return _stranka_nahrat(ok=vysledek)
 
 
 HIST = """<h1>Historie</h1>

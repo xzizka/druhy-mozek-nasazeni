@@ -406,6 +406,14 @@ Secret=kryton_session_secret,type=env,target=SESSION_SECRET
 # takze SQL psane modelem nemuze nic zapsat ani kdyby proslo kontrolou
 # v analytics.py. Bez tohohle secretu se analytika jen nezapne.
 Secret=platform_ro_url,type=env,target=ANALYTICS_DATABASE_URL
+# Uloziste originalu nahranych dokumentu (P2). Endpoint a bucket nejsou
+# tajemstvi, takze jdou pres Environment - lip se s nimi ladi a jmeno
+# profilu se uklada ke kazdemu souboru kvuli budouci migraci.
+Environment=S3_PROFILE=backblaze
+Environment=S3_ENDPOINT=https://s3.eu-central-003.backblazeb2.com
+Environment=S3_BUCKET=second-brain-kryton
+Secret=s3_access_key_id,type=env,target=S3_ACCESS_KEY_ID
+Secret=s3_secret_access_key,type=env,target=S3_SECRET_ACCESS_KEY
 # ZMENA proti navrhu: puvodne PublishPort=100.64.0.1:3001:3001, tedy jen na
 # Tailscale adresu. Dohodnuto publikovat i na homelab LAN 10.20.0.0/24, a
 # protoze DHCP i Tailscale adresa jsou dynamicke, bindujeme 0.0.0.0.
