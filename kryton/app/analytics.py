@@ -127,10 +127,13 @@ def run_sql(sql: str) -> tuple[list[str], list[list]]:
     with _pool.connection() as conn:
         try:
             conn.execute("SET TRANSACTION READ ONLY")
-            conn.execute("SET LOCAL statement_timeout = %s",
-                         (config.ANALYTICS_SQL_TIMEOUT_MS,))
-            cur = conn.execute("SELECT * FROM (%s) AS _q LIMIT %s"
-                               % (sql, config.ANALYTICS_MAX_ROWS))
+            # SET LOCAL je utility prikaz, placeholder se do nej nedá —
+            # psycopg by poslal `$1` a Postgres to odmitne se syntax error.
+            # int() je tu proto, aby se do prikazu nedostalo nic jineho.
+            conn.execute("SET LOCAL statement_timeout = %d"
+                         % int(config.ANALYTICS_SQL_TIMEOUT_MS))
+            cur = conn.execute("SELECT * FROM (%s) AS _q LIMIT %d"
+                               % (sql, int(config.ANALYTICS_MAX_ROWS)))
             cols = [d.name for d in (cur.description or [])]
             rows = [[_scalar(v) for v in r] for r in cur.fetchall()]
             return cols, rows
