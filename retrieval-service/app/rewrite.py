@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import threading
 from typing import NamedTuple
 
@@ -95,10 +94,39 @@ DETECT_PROMPT = (
     "Text:\n"
 )
 
-# Model rád obalí JSON do code fence nebo přidá větu okolo. Bere se první
-# `{` až poslední `}` — na jednořádkovou odpověď to stačí a je to odolnější
-# než trvat na čistém JSONu.
-_JSON = re.compile(r"\{.*\}", re.S)
+def _json_object(out: str) -> dict | None:
+    """První JSON objekt z odpovědi modelu, nebo None.
+
+    Model rád obalí JSON do code fence nebo přidá větu okolo, takže se
+    hledá objekt uvnitř textu. Dřív to dělal regex `\\{.*\\}`, tedy od prvního
+    `{` k poslednímu `}`. To je hladové a rozbije se, jakmile model přidá
+    cokoliv se závorkou navíc:
+
+        {"lang":"cs","keywords":"první věta kniha Paradise Lost"}}
+
+    Tady regex spolkl i tu přebývající závorku, `json.loads` spadl, vrátilo
+    se None a zafungoval fallback „ber celou odpověď jako klíčová slova" —
+    do lexikální a fuzzy větve pak šel celý syrový výstup včetně JSON
+    syntaxe. Selhání bylo tiché, projevilo se jen horším vyhledáváním.
+    Změřeno 2026-08-09 na dotazu „Jaká je první věta z knihy Paradise Lost?".
+
+    `raw_decode` je na tohle přesně stavěné: přečte JEDNU hodnotu od zadané
+    pozice a co je za ní, ignoruje. Zvládne i závorky uvnitř řetězců
+    a vnořené objekty, na což by regex musel umět počítat úrovně.
+    """
+    dec = json.JSONDecoder()
+    start = 0
+    while True:
+        i = out.find("{", start)
+        if i < 0:
+            return None
+        try:
+            data, _ = dec.raw_decode(out, i)
+        except ValueError:
+            # Tahle `{` nebyla začátek objektu (třeba text v prose).
+            start = i + 1
+            continue
+        return data if isinstance(data, dict) else None
 
 _cache: dict[str, tuple[str, str | None]] = {}
 _lock = threading.Lock()
@@ -136,17 +164,15 @@ def _call(prompt: str, max_tokens: int) -> str:
 
 def _json_field(out: str, key: str) -> str | None:
     """Vytáhne skalární klíč z JSON odpovědi. Nepovede-li se, None."""
-    m = _JSON.search(out)
-    if not m:
-        return None
-    try:
-        data = json.loads(m.group(0))
-    except (ValueError, TypeError):
-        return None
-    if not isinstance(data, dict):
+    data = _json_object(out)
+    if data is None:
         return None
     value = data.get(key)
-    return str(value).strip() if value is not None else None
+    if value is None or isinstance(value, (dict, list)):
+        # Vnořená struktura není skalár; volající čeká řetězec a `str(dict)`
+        # by mu podstrčil něco, co vypadá jako hodnota, ale není.
+        return None
+    return str(value).strip()
 
 
 def _clean_terms(raw: str) -> str:
