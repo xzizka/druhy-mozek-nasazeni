@@ -129,10 +129,33 @@ Tedy: nahrát soubor → vytáhnout z něj text → text zaindexovat do databáz
 - `/srv/brain/markdown` je git repo, které se každých 15 minut samo pushuje
   na GitHub. Cokoliv, co tam spadne, jde do veřejné cesty toho repozitáře.
 
-### Otevřené otázky
+### Úložiště: Backblaze B2 (rozhodnuto 2026-08-09)
 
-1. **Jaké S3?** Hetzner Object Storage, MinIO na brainu, AWS, něco jiného?
-   Bez toho nejde řešit endpoint, region, ceny ani zálohu.
+| | |
+|---|---|
+| endpoint | `https://s3.eu-central-003.backblazeb2.com` |
+| bucket | `second-brain-kryton` |
+| region | `eu-central-003` (u B2 je součástí hostitele) |
+
+**Přístup ověřen 2026-08-09** proti živému bucketu, ne odhadnut: zápis,
+čtení zpět s ověřením obsahu, `head_object`, výpis i smazání prošly.
+Uživatelská metadata (`x-amz-meta-*`) se zachovávají — to je místo pro
+původní název souboru a hash. Testovací objekt smazán, bucket je prázdný.
+
+`ListBuckets` vrací `AccessDenied: not entitled`, což je **v pořádku a záměr**:
+klíč je omezený na jeden bucket. Kód se tedy nesmí spoléhat na výpis bucketů
+ani na `head_bucket` jako test dostupnosti.
+
+Drobnost, která umí zmást při porovnávání: B2 normalizuje `Content-Type`
+a z `text/plain; charset=utf-8` udělá `text/plain;charset=utf-8`.
+
+**Výměna endpointu a migrace jsou požadavek, ne možnost.** Z toho plyne:
+konfigurace musí být čistě S3-kompatibilní (endpoint, region, bucket, klíče
+jako proměnné), nikde žádná zabudovaná znalost Backblaze, a v databázi
+u dokumentu musí být uložený i **profil úložiště**, ne jen klíč objektu —
+jinak po migraci nepůjde poznat, kde který originál leží.
+
+### Otevřené otázky
 2. Kam se ukládá **vytažený text**? Do markdown stromu (znovupoužije celou
    pipeline, ale text z PDF se tím dostane do git repa poznámek), nebo mimo
    něj do vlastního úložiště?
