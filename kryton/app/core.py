@@ -62,6 +62,62 @@ def search(query: str, limit: int = None, rewrite: bool | None = None) -> dict:
     return r.json()
 
 
+# Kódy odpovídají CHECK constraintu na `document.lang` a mapě v lang.py
+# retrievalu. Neznámý kód se nezahodí, jen se ukáže holý.
+LANG_NAMES = {"cs": "čeština", "en": "angličtina", "de": "němčina", "la": "latina"}
+LANG_TS = {"cs": "czech", "en": "english", "de": "german", "la": "latin"}
+
+# Dotazy, na které se z osmi úryvků odpovědět nedá, protože se ptají na celek.
+# Bez diakritiky, protože uživatel ji nemusí psát — porovnává se přes _ascii().
+AGREGACNI_SLOVA = (
+    "kolik", "pocet", "poctu", "poctem", "celkem", "prumer", "median",
+    "statistik", "nejvic", "nejvice", "nejmene", "nejdelsi", "nejkratsi",
+    "nejcastej", "serad", "seradit", "rozlozeni", "zastoupen", "podle jazyka",
+    "vsech dokumentu", "vsechny dokumenty", "kazdeho jazyka",
+)
+
+
+def _ascii(text: str) -> str:
+    return (unicodedata.normalize("NFKD", text or "")
+            .encode("ascii", "ignore").decode().lower())
+
+
+def je_agregacni(query: str) -> bool:
+    """Vypadá dotaz na souhrn nebo počty nad celým korpusem?
+
+    Schválně hrubé a schválně jen na zobrazení odkazu na /korpus — nic to
+    neodklání ani neblokuje. Falešně pozitivní nález stojí jednu nenápadnou
+    větu navíc, falešně negativní nezpůsobí nic horšího než dosud.
+    """
+    return any(w in _ascii(query) for w in AGREGACNI_SLOVA)
+
+
+def corpus_facts() -> str:
+    """Skutečná čísla o korpusu do promptu, ~100 tokenů.
+
+    Tohle je oprava měřeného selhání: model dostane osm úryvků a na otázku
+    „kolik je kterých knih" si počty složil z nich (66 anglických = knihy
+    Bible) místo z indexu. Fakta v kontextu ho stojí zlomek promptu a dávají
+    mu z čeho odpovědět správně.
+
+    Když retrieval neodpovídá, vrátí prázdno — odpověď se tím nezablokuje,
+    jen přijde o tenhle blok.
+    """
+    try:
+        s = corpus_stats()
+    except Exception as e:
+        log.warning("fakta o korpusu nedostupna: %s", e)
+        return ""
+    by_lang = s.get("documents_by_lang") or {}
+    parts = ", ".join("%s %s" % (LANG_NAMES.get(c, c), by_lang[c])
+                      for c in sorted(by_lang, key=lambda c: -by_lang[c]))
+    return ("FAKTA O KORPUSU (autoritativní, přímo z databáze):\n"
+            "- dokumentů celkem: %s\n"
+            "- dokumentů podle jazyka: %s\n"
+            "- textových úseků (chunků) celkem: %s\n"
+            % (s.get("documents", "?"), parts or "neznámé", s.get("chunks", "?")))
+
+
 def corpus_stats() -> dict:
     """`/stats` retrievalu: kolik je čeho v indexu.
 
@@ -93,7 +149,12 @@ SYSTEM = (
     "Když kontext na otázku neodpovídá, řekni to přímo — nedomýšlej si. "
     "Je lepší přiznat, že v poznámkách odpověď není, než ji vymyslet.\n"
     "Předchozí zprávy konverzace slouží jen k pochopení, na co se uživatel "
-    "ptá teď. Nejsou zdrojem faktů — ta ber výhradně z úryvků."
+    "ptá teď. Nejsou zdrojem faktů — ta ber výhradně z úryvků.\n"
+    "POČTY A SOUHRNY ber VÝHRADNĚ z bloku FAKTA O KORPUSU, nikdy je "
+    "nedopočítávej z úryvků. Úryvků dostáváš jen několik a celkový obraz "
+    "z nich složit nejde — spočítat knihy zmíněné v úryvcích a vydávat to "
+    "za obsah databáze je chyba. Když v FAKTECH odpověď není, řekni to "
+    "přímo a odkaž uživatele na stránku /korpus."
 )
 
 
@@ -134,8 +195,10 @@ def answer(query: str, hits: list[dict],
 
     msgs = [{"role": "system", "content": SYSTEM}]
     msgs += history_messages(prior)
+    facts = corpus_facts()
     msgs.append({"role": "user",
-                 "content": f"Úryvky z poznámek:\n\n{ctx}\n\nOtázka: {query}"})
+                 "content": (f"{facts}\n" if facts else "")
+                            + f"Úryvky z poznámek:\n\n{ctx}\n\nOtázka: {query}"})
 
     t0 = time.time()
     r = httpx.post(

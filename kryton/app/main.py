@@ -146,6 +146,11 @@ SMAZAT = ("onsubmit=\"return confirm('Smazat konverzaci i s odpověďmi "
           "a hodnocením? Nejde to vrátit.')\"")
 
 CONV = """<h1>{{ title or "Konverzace" }}</h1>
+{% if agregacni %}<p class="msg" style="background:#fc04">
+Tenhle dotaz vypadá na souhrn nebo počty nad celým korpusem. Přesná čísla
+jsou na <a href="/korpus"><b>/korpus</b></a> — berou se přímo z databáze.
+Odpověď níž vychází z nalezených úryvků a z faktů o korpusu, ne z projití
+všech dokumentů.</p>{% endif %}
 {% for m in msgs %}
 <div class="msg {{ m.role }}"><pre>{{ m.content }}</pre>
 {% if m.citations %}<div class="cit"><b>Zdroje:</b><ol>
@@ -177,7 +182,12 @@ def conversation(cid: str, kryton_session: str = Cookie(None)):
         return RedirectResponse("/prihlasit", status_code=303)
     msgs = db.messages(cid)
     title = next((c["title"] for c in db.conversations(200) if c["id"] == cid), None)
-    return page(title or "Konverzace", render(CONV, msgs=msgs, cid=cid, title=title))
+    # Odkaz na /korpus se počítá z POSLEDNÍ otázky, ne z celé konverzace —
+    # jinak by upozornění viselo do konce konverzace i po změně tématu.
+    posledni = next((m["content"] for m in reversed(msgs) if m["role"] == "user"), "")
+    return page(title or "Konverzace",
+                render(CONV, msgs=msgs, cid=cid, title=title,
+                       agregacni=core.je_agregacni(posledni)))
 
 
 @app.post("/dotaz")
@@ -302,12 +312,6 @@ def inbox_done(item_id: int = Form(...), kryton_session: str = Cookie(None)):
     return RedirectResponse("/inbox", status_code=303)
 
 
-# Kódy odpovídají CHECK constraintu na `document.lang` a mapě v lang.py
-# retrievalu. Když tam přibude jazyk, přibude i sem — neznámý kód se
-# nezahodí, jen se ukáže holý.
-LANG_NAMES = {"cs": "čeština", "en": "angličtina", "de": "němčina", "la": "latina"}
-LANG_TS = {"cs": "czech", "en": "english", "de": "german", "la": "latin"}
-
 CORPUS = """<h1>Korpus</h1>
 <p class="meta">Přesná čísla z databáze. Na tohle se schválně neptá model —
 agregaci nad tisícem dokumentů z osmi úryvků složit nejde a odpověď by byla
@@ -345,8 +349,8 @@ def corpus(kryton_session: str = Cookie(None)):
 
     by_lang = s.get("documents_by_lang") or {}
     by_ts = s.get("chunks_by_ts_config") or {}
-    rows = [{"code": c, "name": LANG_NAMES.get(c, c), "docs": by_lang[c],
-             "chunks": by_ts.get(LANG_TS.get(c, ""), 0)}
+    rows = [{"code": c, "name": core.LANG_NAMES.get(c, c), "docs": by_lang[c],
+             "chunks": by_ts.get(core.LANG_TS.get(c, ""), 0)}
             for c in sorted(by_lang, key=lambda c: -by_lang[c])]
 
     ix = s.get("indexer") or {}

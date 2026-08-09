@@ -9,7 +9,18 @@ Stav: `ZAZNAMENÁNO` → `ANALYZOVÁNO` → `SCHVÁLENO` → `HOTOVO`.
 
 ## P1 — Rozpoznat halucinačně rizikové dotazy a odkázat na `/korpus`
 
-**Stav: ZAZNAMENÁNO (2026-08-09)**
+**Stav: P1a HOTOVO (2026-08-09) · P1b SCHVÁLENO, nezačato**
+
+Rozhodnuto 2026-08-09:
+
+- **P1a — obojí.** Fakta o korpusu se přikládají do kontextu každého dotazu
+  *a zároveň* heuristika u agregačně vypadajících dotazů zobrazí odkaz
+  na `/korpus`. Hotovo, viz níž.
+- **P1b — spočítat automaticky, do `/korpus` připnout až na kliknutí.**
+  Práci dělá stroj, kanonizaci člověk. Důvod: sémanticky špatná agregace
+  zapsaná natvrdo by udělala z `/korpus` zdroj nesmyslů, a `/korpus` je
+  přitom právě ta stránka, proti které se halucinace poměřuje.
+- **Pořadí:** nejdřív P1a, změřit, teprve pak P1b.
 
 Zadání, jak bylo formulováno:
 

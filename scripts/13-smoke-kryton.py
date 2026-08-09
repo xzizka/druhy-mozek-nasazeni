@@ -245,6 +245,35 @@ core.corpus_stats = lambda: STATS
 check("ANSWER_MAX_TOKENS zvednutý na 8000", core.config.ANSWER_MAX_TOKENS == 8000,
       str(core.config.ANSWER_MAX_TOKENS))
 
+print("== P1a: rozpoznání agregačních dotazů ==")
+for q in ["Kolik je kterých knih?",
+          "Udělej mi sumarizaci knih podle jazyka. Kolik je kterých?",
+          "kolik mam poznamek",          # bez diakritiky
+          "Seřaď dokumenty podle délky",
+          "Jaké je rozložení jazyků?"]:
+    check("agregační: %r" % q[:36], core.je_agregacni(q))
+for q in ["Čím se ladí latence dotazu u HNSW indexu?", "A proč?",
+          "Jak nastavit maintenance_work_mem při stavbě indexu?"]:
+    check("běžný: %r" % q[:36], not core.je_agregacni(q))
+
+f = core.corpus_facts()
+check("fakta o korpusu nesou skutečná čísla",
+      "FAKTA O KORPUSU" in f and "979" in f and "čeština 400" in f, repr(f[:90]))
+check("fakta jsou krátká (do ~600 znaků)", len(f) < 600, str(len(f)))
+core.corpus_stats = _boom
+check("nedostupný retrieval fakta jen vynechá", core.corpus_facts() == "")
+core.corpus_stats = lambda: STATS
+
+_msgs.clear()
+_add_message(CID, "user", "Kolik je kterých knih?")
+r = c.get("/konverzace/%s" % CID)
+check("agregační dotaz ukáže odkaz na /korpus",
+      "/korpus" in r.text and "souhrn nebo počty" in r.text)
+_msgs.clear()
+_add_message(CID, "user", "Čím se ladí latence dotazu?")
+r = c.get("/konverzace/%s" % CID)
+check("běžný dotaz odkaz neukazuje", "souhrn nebo počty" not in r.text)
+
 print("== mazání konverzace ==")
 r = c.get("/historie")
 check("historie nabízí mazání", "/konverzace/smazat" in r.text and "Smazat" in r.text)
