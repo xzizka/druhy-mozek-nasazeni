@@ -62,6 +62,18 @@ def search(query: str, limit: int = None, rewrite: bool | None = None) -> dict:
     return r.json()
 
 
+def corpus_stats() -> dict:
+    """`/stats` retrievalu: kolik je čeho v indexu.
+
+    Agregační otázky („kolik je kterých knih") přes RAG nejdou — model dostane
+    osm úryvků a z nich se tisíc dokumentů spočítat nedá. Odpověď je přitom
+    v databázi přesně, takže se pro ni chodí sem, ne k modelu.
+    """
+    r = httpx.get(config.RETRIEVAL_URL.rstrip("/") + "/stats", timeout=20)
+    r.raise_for_status()
+    return r.json()
+
+
 def trigger_reindex() -> None:
     """Po zápisu poznámky. Selhání se jen zaloguje — poznámka je uložená,
     což je to podstatné; index se dorovná při dalším běhu."""

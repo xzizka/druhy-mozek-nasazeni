@@ -69,6 +69,20 @@ db.add_inbox = lambda p, e: None
 db.inbox_open = lambda limit=100: _inbox
 db.inbox_done = lambda i: None
 
+SMAZANO = []
+
+
+def _delete_conversation(cid):
+    # Psycopg na nevalidní UUID vyhodí výjimku, ne prázdný výsledek —
+    # stub to napodobuje, aby se testovala i chybová větev routy.
+    if cid != CID:
+        raise ValueError('invalid input syntax for type uuid: "%s"' % cid)
+    SMAZANO.append(cid)
+    return 1
+
+
+db.delete_conversation = _delete_conversation
+
 
 def _add_message(cid, role, content, citations=None, model=None, latency_ms=None):
     _msgs.append({"id": len(_msgs) + 1, "role": role, "content": content,
@@ -97,13 +111,26 @@ def _answer(q, hits, prior=None):
 core.answer = _answer
 core.trigger_reindex = lambda: None
 
+# Tvar odpovídá skutečnému /stats retrievalu (ověřeno 2026-08-09).
+STATS = {
+    "documents": 979, "chunks": 114183, "chunks_without_embedding": 0,
+    "documents_unfinished": 0, "hnsw_index_present": True,
+    "documents_by_lang": {"cs": 400, "de": 177, "en": 301, "la": 101},
+    "chunks_by_ts_config": {"czech": 46362, "english": 31852,
+                            "german": 24824, "latin": 11145},
+    "indexer": {"running": False, "last_result": {
+        "new": 0, "changed": 0, "unchanged": 979, "deleted": 0,
+        "chunks_embedded": 0, "chunks_recycled": 0, "seconds": 1.3}},
+}
+core.corpus_stats = lambda: STATS
+
 from fastapi.testclient import TestClient  # noqa: E402
 from app import main  # noqa: E402
 
 c = TestClient(main.app)
 
 print("== bez přihlášení ==")
-for path in ["/", "/historie", "/inbox", "/zachytit"]:
+for path in ["/", "/historie", "/inbox", "/zachytit", "/korpus"]:
     r = c.get(path, follow_redirects=False)
     check(f"GET {path} přesměruje na přihlášení",
           r.status_code == 303 and r.headers.get("location") == "/prihlasit",
@@ -194,6 +221,50 @@ c.post("/zachytit", data={"text": "Druhý zápis", "title": ""})
 denik = denik_path.read_text(encoding="utf-8")
 check("druhý zápis se přípíše, nepřepíše",
       "Zápis do deníku" in denik and "Druhý zápis" in denik)
+
+print("== korpus ==")
+r = c.get("/korpus")
+ok = (r.status_code == 200 and "čeština" in r.text and "979" in r.text
+      and "114183" in r.text and "46362" in r.text)
+check("GET /korpus ukáže čísla z retrievalu", ok, str(r.status_code))
+check("jazyky jsou seřazené podle počtu",
+      r.text.index("čeština") < r.text.index("angličtina") < r.text.index("němčina"))
+check("stav indexu se vypíše", "HNSW" in r.text and "Poslední indexace" in r.text)
+
+
+def _boom():
+    raise RuntimeError("spojeni odmitnuto")
+
+
+core.corpus_stats = _boom
+r = c.get("/korpus")
+check("nedostupný retrieval nezhodí stránku",
+      r.status_code == 200 and "Retrieval neodpovídá" in r.text, str(r.status_code))
+core.corpus_stats = lambda: STATS
+
+check("ANSWER_MAX_TOKENS zvednutý na 8000", core.config.ANSWER_MAX_TOKENS == 8000,
+      str(core.config.ANSWER_MAX_TOKENS))
+
+print("== mazání konverzace ==")
+r = c.get("/historie")
+check("historie nabízí mazání", "/konverzace/smazat" in r.text and "Smazat" in r.text)
+r = c.get(f"/konverzace/{CID}")
+check("konverzace nabízí mazání", "Smazat konverzaci" in r.text)
+r = c.post("/konverzace/smazat", data={"conversation_id": CID}, follow_redirects=False)
+check("POST /konverzace/smazat přesměruje na historii",
+      r.status_code == 303 and r.headers.get("location") == "/historie",
+      f"{r.status_code} {r.headers.get('location')}")
+check("mazání se propsalo do DB", SMAZANO == [CID], repr(SMAZANO))
+
+r = c.post("/konverzace/smazat", data={"conversation_id": "neni-uuid"},
+           follow_redirects=False)
+check("neplatné id nezhodí aplikaci", r.status_code == 303, str(r.status_code))
+
+fresh = TestClient(main.app)
+r = fresh.post("/konverzace/smazat", data={"conversation_id": CID},
+               follow_redirects=False)
+check("mazání vyžaduje přihlášení",
+      r.headers.get("location") == "/prihlasit" and SMAZANO == [CID], repr(SMAZANO))
 
 print("== ochrana cest ==")
 for bad in ["../mimo.md", "denik/../../mimo.md", ".git/config.md", "poznamka.txt"]:

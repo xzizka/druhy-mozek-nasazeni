@@ -40,9 +40,13 @@ button{font:inherit;padding:.45rem 1rem;border-radius:.4rem;border:1px solid #88
 .row{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
 pre{white-space:pre-wrap;font:inherit;margin:0}
 .err{background:#f005;padding:.6rem 1rem;border-radius:.4rem}
+table{border-collapse:collapse;width:100%;margin:.6rem 0}
+th,td{text-align:left;padding:.35rem .6rem;border-bottom:1px solid #8883}
+th.n,td.n{text-align:right;font-variant-numeric:tabular-nums}
+tr.sum td,tr.sum th{border-top:2px solid #8886;border-bottom:none;font-weight:600}
 </style></head><body>
 <nav><a href="/"><b>Kryton</b></a><a href="/zachytit">Zachytit</a>
-<a href="/historie">Historie</a><a href="/inbox">Inbox</a>
+<a href="/historie">Historie</a><a href="/inbox">Inbox</a><a href="/korpus">Korpus</a>
 <span style="flex:1"></span><a href="/odhlasit">Odhlásit</a></nav>
 {{ body }}
 </body></html>"""
@@ -135,6 +139,12 @@ def index(kryton_session: str = Cookie(None)):
     return page("Dotaz", render(ASK, convs=db.conversations(10)))
 
 
+# Mazání je nevratné (CASCADE bere zprávy i hodnocení), takže potvrzení.
+# Inline JS je tu jediný na celé aplikaci — na potvrzovací mezistránku
+# to nestojí a bez JS se prostě smaže rovnou, což je pořád vědomý klik.
+SMAZAT = ("onsubmit=\"return confirm('Smazat konverzaci i s odpověďmi "
+          "a hodnocením? Nejde to vrátit.')\"")
+
 CONV = """<h1>{{ title or "Konverzace" }}</h1>
 {% for m in msgs %}
 <div class="msg {{ m.role }}"><pre>{{ m.content }}</pre>
@@ -155,7 +165,10 @@ CONV = """<h1>{{ title or "Konverzace" }}</h1>
 <p><textarea name="query" rows="2" placeholder="Doplňující dotaz…"></textarea></p>
 <div class="row"><button>Zeptat se</button>
 <label><input type="checkbox" name="rewrite" value="1" checked style="width:auto"> přepis dotazu přes LLM</label></div>
-</form>"""
+</form>
+<form method="post" action="/konverzace/smazat" style="margin-top:2rem" """ + SMAZAT + """>
+<input type="hidden" name="conversation_id" value="{{ cid }}">
+<button>Smazat konverzaci</button></form>"""
 
 
 @app.get("/konverzace/{cid}", response_class=HTMLResponse)
@@ -204,6 +217,24 @@ def feedback(message_id: int = Form(...), rating: int = Form(...),
     return RedirectResponse(f"/konverzace/{conversation_id}", status_code=303)
 
 
+@app.post("/konverzace/smazat")
+def conversation_delete(conversation_id: str = Form(...),
+                        kryton_session: str = Cookie(None)):
+    # POST, ne GET: mazání odkazem by šlo spustit prefetchem prohlížeče
+    # nebo náhodným průchodem historie. Kolize s GET /konverzace/{cid}
+    # není — liší se metodou.
+    if not logged_in(kryton_session):
+        return RedirectResponse("/prihlasit", status_code=303)
+    try:
+        n = db.delete_conversation(conversation_id)
+    except Exception as e:
+        # Nejčastěji neplatné UUID z ručně upraveného formuláře.
+        log.warning("mazani konverzace %r selhalo: %s", conversation_id, e)
+        n = 0
+    log.info("smazana konverzace %s (%s radku)", conversation_id, n)
+    return RedirectResponse("/historie", status_code=303)
+
+
 CAPTURE = """<h1>Zachytit</h1>{% if saved %}<p class="err" style="background:#0a05">
 Uloženo do <code>{{ saved }}</code>.</p>{% endif %}
 <form method="post" action="/zachytit">
@@ -230,10 +261,14 @@ def capture(text: str = Form(""), title: str = Form(""),
     return page("Zachytit", render(CAPTURE, saved=rel))
 
 
-HIST = """<h1>Historie</h1><ul>{% for c in convs %}
-<li><a href="/konverzace/{{ c.id }}">{{ c.title or "(bez názvu)" }}</a>
-<span class="meta">{{ c.created_at.strftime("%d.%m.%Y %H:%M") }} · {{ c.messages }} zpráv</span></li>
-{% endfor %}</ul>{% if not convs %}<p>Zatím nic.</p>{% endif %}"""
+HIST = """<h1>Historie</h1>
+{% for c in convs %}<div class="row" style="border-bottom:1px solid #8883;padding:.45rem 0">
+<div style="flex:1"><a href="/konverzace/{{ c.id }}">{{ c.title or "(bez názvu)" }}</a>
+<div class="meta">{{ c.created_at.strftime("%d.%m.%Y %H:%M") }} · {{ c.messages }} zpráv</div></div>
+<form method="post" action="/konverzace/smazat" """ + SMAZAT + """>
+<input type="hidden" name="conversation_id" value="{{ c.id }}">
+<button>Smazat</button></form></div>
+{% endfor %}{% if not convs %}<p>Zatím nic.</p>{% endif %}"""
 
 
 @app.get("/historie", response_class=HTMLResponse)
@@ -265,6 +300,71 @@ def inbox_done(item_id: int = Form(...), kryton_session: str = Cookie(None)):
         return RedirectResponse("/prihlasit", status_code=303)
     db.inbox_done(item_id)
     return RedirectResponse("/inbox", status_code=303)
+
+
+# Kódy odpovídají CHECK constraintu na `document.lang` a mapě v lang.py
+# retrievalu. Když tam přibude jazyk, přibude i sem — neznámý kód se
+# nezahodí, jen se ukáže holý.
+LANG_NAMES = {"cs": "čeština", "en": "angličtina", "de": "němčina", "la": "latina"}
+LANG_TS = {"cs": "czech", "en": "english", "de": "german", "la": "latin"}
+
+CORPUS = """<h1>Korpus</h1>
+<p class="meta">Přesná čísla z databáze. Na tohle se schválně neptá model —
+agregaci nad tisícem dokumentů z osmi úryvků složit nejde a odpověď by byla
+sebejistý odhad.</p>
+{% if err %}<p class="err">{{ err }}</p>{% else %}
+<table>
+<tr><th>jazyk</th><th class="n">dokumentů</th><th class="n">chunků</th></tr>
+{% for r in rows %}<tr><td>{{ r.name }} <span class="meta">{{ r.code }}</span></td>
+<td class="n">{{ r.docs }}</td><td class="n">{{ r.chunks }}</td></tr>
+{% endfor %}
+<tr class="sum"><th>celkem</th><td class="n">{{ total_docs }}</td><td class="n">{{ total_chunks }}</td></tr>
+</table>
+<h2>Stav indexu</h2>
+<table>
+<tr><td>HNSW index postavený</td><td class="n">{{ "ano" if hnsw else "NE" }}</td></tr>
+<tr><td>chunky bez embeddingu</td><td class="n">{{ no_emb }}</td></tr>
+<tr><td>nedokončené dokumenty</td><td class="n">{{ unfinished }}</td></tr>
+<tr><td>indexace právě běží</td><td class="n">{{ "ano" if running else "ne" }}</td></tr>
+</table>
+{% if last %}<h2>Poslední indexace</h2><p class="meta">{{ last }}</p>{% endif %}
+{% endif %}"""
+
+
+@app.get("/korpus", response_class=HTMLResponse)
+def corpus(kryton_session: str = Cookie(None)):
+    if not logged_in(kryton_session):
+        return RedirectResponse("/prihlasit", status_code=303)
+    try:
+        s = core.corpus_stats()
+    except Exception as e:
+        # Retrieval může být dole nebo uprostřed reindexu. Stránka s chybovou
+        # hláškou je lepší než 500 — zbytek Krytona na tomhle nezávisí.
+        log.warning("/stats retrievalu nedostupne: %s", e)
+        return page("Korpus", render(CORPUS, err="Retrieval neodpovídá: %s" % e))
+
+    by_lang = s.get("documents_by_lang") or {}
+    by_ts = s.get("chunks_by_ts_config") or {}
+    rows = [{"code": c, "name": LANG_NAMES.get(c, c), "docs": by_lang[c],
+             "chunks": by_ts.get(LANG_TS.get(c, ""), 0)}
+            for c in sorted(by_lang, key=lambda c: -by_lang[c])]
+
+    ix = s.get("indexer") or {}
+    lr = ix.get("last_result") or {}
+    last = ""
+    if lr:
+        last = ("nových %s, změněných %s, beze změny %s, smazaných %s; "
+                "embeddingů %s, recyklovaných chunků %s; %s s"
+                % (lr.get("new", 0), lr.get("changed", 0), lr.get("unchanged", 0),
+                   lr.get("deleted", 0), lr.get("chunks_embedded", 0),
+                   lr.get("chunks_recycled", 0), lr.get("seconds", 0)))
+
+    return page("Korpus", render(
+        CORPUS, err=None, rows=rows,
+        total_docs=s.get("documents", 0), total_chunks=s.get("chunks", 0),
+        hnsw=s.get("hnsw_index_present"), no_emb=s.get("chunks_without_embedding", 0),
+        unfinished=s.get("documents_unfinished", 0), running=ix.get("running"),
+        last=last))
 
 
 @app.get("/stats")

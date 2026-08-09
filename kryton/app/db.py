@@ -129,6 +129,18 @@ def messages(conversation_id) -> list[dict]:
             for r in rows]
 
 
+def delete_conversation(conversation_id) -> int:
+    """Smaže konverzaci i s obsahem. Vrací počet smazaných řádků (0 = nebyla).
+
+    Zprávy a hodnocení jdou s ní: `message.conversation_id` má ON DELETE
+    CASCADE na conversation a `feedback.message_id` na message, takže stačí
+    smazat kořen a nezůstanou sirotci.
+    """
+    with _pool.connection() as conn:
+        return conn.execute("DELETE FROM conversation WHERE id = %s",
+                            (conversation_id,)).rowcount
+
+
 def set_feedback(message_id: int, rating: int, useful=None, note: str = None) -> None:
     with _pool.connection() as conn:
         conn.execute(

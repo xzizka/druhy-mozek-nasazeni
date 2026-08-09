@@ -15,7 +15,17 @@ ANSWER_MODEL = os.environ.get("ANSWER_MODEL", "reasoning")
 # reasoning_content dřív, než začne psát odpověď. Změřeno, že při
 # max_tokens=300 vrátil PRÁZDNÝ content s finish_reason=length.
 # Proto tisíce, ne stovky.
-ANSWER_MAX_TOKENS = int(os.environ.get("ANSWER_MAX_TOKENS", "3000"))
+#
+# ZVÝŠENO 2026-08-09 z 3000 na 8000. Dotaz „udělej sumarizaci knih podle
+# jazyka, kolik je kterých" spotřeboval ve spend logu přesně 3000 výstupních
+# tokenů, tedy celý strop, a vrátil prázdný content. Pro srovnání: běžné
+# dotazy na tomtéž korpusu utratily 202 a 468 tokenů. Agregační otázky nutí
+# reasoning model uvažovat dlouho, protože odpověď z dodaných úryvků složit
+# nejde — na to je stránka /korpus, která bere čísla z databáze.
+#
+# Hodnota z requestu má přednost před `max_tokens: 4000` u aliasu reasoning
+# v litellm-config.yaml, takže strop určuje TENHLE řádek, ne LiteLLM.
+ANSWER_MAX_TOKENS = int(os.environ.get("ANSWER_MAX_TOKENS", "8000"))
 ANSWER_TIMEOUT = float(os.environ.get("ANSWER_TIMEOUT", "180"))
 
 # Kolik chunků poslat modelu jako kontext. Retrieval vrací RESULT_LIMIT=8.

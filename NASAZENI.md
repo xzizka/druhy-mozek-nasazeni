@@ -175,7 +175,16 @@ nepoužívá; drží se jen kvůli reprodukovatelnosti `scripts/06-eval-reranker
   postavený 2026-08-06, secrety, DB `kryton` i quadlet s `[Install]` na místě.
   FastAPI, server-rendered HTML se šablonami inline, žádný build step.
   Endpointy: `/healthz`, `/stats`, `/prihlasit`, `/odhlasit`, `/`, `/dotaz`,
-  `/konverzace/{id}`, `/hodnoceni`, `/zachytit`, `/historie`, `/inbox`.
+  `/konverzace/{id}`, `/konverzace/smazat`, `/hodnoceni`, `/zachytit`,
+  `/historie`, `/inbox`, `/korpus`.
+
+  **`/korpus` je tam schválně.** Agregační otázky („kolik je kterých knih")
+  přes RAG nejdou — model dostane osm úryvků a z nich tisíc dokumentů
+  nespočítá. Změřeno 2026-08-09: takový dotaz spotřeboval celý strop
+  `ANSWER_MAX_TOKENS` na uvažování a vrátil prázdný content, zatímco běžné
+  dotazy na tomtéž korpusu utratily 202 a 468 tokenů. Strop byl zvednut
+  na 8000, ale to řeší jen symptom; přesná čísla bere `/korpus` z `/stats`
+  retrievalu, tedy z databáze.
 
   **Do 2026-08-09 ale nebyl ANI JEDNOU spuštěný**, a první běh to hned ukázal:
   `page()` prohnala už vyrenderované tělo stránky druhým průchodem šablony
