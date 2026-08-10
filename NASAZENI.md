@@ -581,6 +581,11 @@ odhalila, jsou body 6 a 7 výš.
    Pravidlo pro udržení: **na brainu se soubory needitují.** Kontrola:
    `git -C /root/deploy status --short` musí být prázdné.
 
+   **`git pull` se nesmí dělat, když z klonu běží nějaký skript.** Bash čte
+   soubor z disku průběžně, ne celý dopředu, takže přepsání skriptu pod běžícím
+   procesem umí rozbít provádění uprostřed. Kvůli tomu čekal pull dva dny, než
+   doběhl zátěžový test z `10-scale-test.sh`. U dlouhých běhů to plánuj předem.
+
    **V repozitáři nejsou žádné secrets** a nemají tam být — hesla i API klíče
    jdou přes podman secrets a odkazy `os.environ/` v `litellm-config.yaml`
    (ověřeno grepem před prvním commitem). Jejich ztráta ale znamená
