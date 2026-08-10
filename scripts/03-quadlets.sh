@@ -333,7 +333,7 @@ Environment=RERANK_MODEL=bge-reranker-v2-m3
 # Rerank na CPU je nejdražší krok, proto 20 a ne 50.
 Environment=RRF_CANDIDATES=60
 Environment=RERANK_TOP_K=20
-# Prepis dotazu na klicova slova pres LiteLLM alias `cheap`. Navrh to
+# Prepis dotazu na klicova slova pres LiteLLM alias \`cheap\`. Navrh to
 # zamyslel - litellm-config.yaml ma na konci prikladovy virtual key
 # s "models":["cheap"] prave pro retrieval-service. Veta v README o tom,
 # ze retrieval nema pristup na LiteLLM, se tyka EMBEDDINGU, ne prepisu.
@@ -345,10 +345,10 @@ Environment=REWRITE_MODEL=cheap
 Environment=REWRITE_ENABLED=1
 Secret=litellm_retrieval_key,type=env,target=LITELLM_API_KEY
 # Vicejazycnost (sql/03-multilang.sql: cs|en|de|la).
-# DEFAULT_LANG plati, kdyz jazyk neurci ani `lang:` ve frontmatteru,
+# DEFAULT_LANG plati, kdyz jazyk neurci ani \`lang:\` ve frontmatteru,
 # ani detekce pres alias cheap - tedy i kdyz je LiteLLM nedostupny.
 Environment=DEFAULT_LANG=cs
-# Detekce jazyka dokumentu pri indexaci. Tyka se JEN dokumentu bez `lang:`
+# Detekce jazyka dokumentu pri indexaci. Tyka se JEN dokumentu bez \`lang:\`
 # ve frontmatteru a jen stavu NEW/CHANGED, takze ustaleny inkrementalni beh
 # nedetekuje nic. Pri prvnim naplneni velkeho korpusu bez frontmatteru je to
 # ale ~2-3 s na dokument navic - tehdy stoji za zvazeni DETECT_LANG_ENABLED=0.
@@ -429,7 +429,7 @@ Environment=BACKUP_S3_PREFIX=db-backups/
 Environment=BACKUP_RETENTION_DAYS=30
 # type=mount, ne env: openssl cte klic jako soubor (-pass file:...), ne
 # jako promennou prostredi - zabranuje se tim naslednemu logovani hodnoty
-# pri pripadnem `env` vypisu procesu.
+# pri pripadnem \`env\` vypisu procesu.
 Secret=backup_encryption_key,type=mount,target=backup_encryption_key
 # ZMENA proti navrhu: puvodne PublishPort=100.64.0.1:3001:3001, tedy jen na
 # Tailscale adresu. Dohodnuto publikovat i na homelab LAN 10.20.0.0/24, a
