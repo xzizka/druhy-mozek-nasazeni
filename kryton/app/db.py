@@ -316,6 +316,22 @@ def uploads(limit: int = 200) -> list[dict]:
              "encoding": r[9], "created_at": r[10]} for r in rows]
 
 
+def delete_upload(upload_id: int) -> str | None:
+    """Smaže řádek v `upload`. Vrací jeho `source_path` (volající podle něj
+    smaže soubor na disku), nebo None, když id neexistovalo.
+
+    S3 originál se NIKDY nemaže odsud ani jinde — viz storage.py. Klíč je
+    odvozený z obsahu (sha256), takže jeden objekt může patřit víc řádkům
+    (dvě nahrání téhož souboru pod jiným názvem = dva řádky, jeden S3 klíč);
+    bezpečné mazání by vyžadovalo počítání odkazů, které se záměrně odkládá
+    (viz POZADAVKY.md, P3).
+    """
+    with _pool.connection() as conn:
+        row = conn.execute("DELETE FROM upload WHERE id = %s RETURNING source_path",
+                           (upload_id,)).fetchone()
+    return row[0] if row else None
+
+
 def stats() -> dict:
     with _pool.connection() as conn:
         c = conn.execute("SELECT count(*) FROM conversation").fetchone()[0]

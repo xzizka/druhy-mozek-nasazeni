@@ -158,6 +158,9 @@ TAB_METRIKY = """<table><tr>{% for c in m.cols %}<th>{{ c }}</th>{% endfor %}</t
 SMAZAT = ("onsubmit=\"return confirm('Smazat konverzaci i s odpověďmi "
           "a hodnocením? Nejde to vrátit.')\"")
 
+SMAZAT_NAHRANY = ("onsubmit=\"return confirm('Smazat dokument z hledání? "
+                  "Originál zůstane na S3, nahrání jde zopakovat.')\"")
+
 CONV = """<h1>{{ title or "Konverzace" }}</h1>
 {% if agregacni %}<p class="msg" style="background:#fc04">
 Tenhle dotaz vypadá na souhrn nebo počty nad celým korpusem. Přesná čísla
@@ -325,12 +328,14 @@ je vypnuté.</p>{% endif %}
 <p><input type="file" name="soubor" required></p>
 <button>Nahrát</button></form>
 {% if items %}<h2>Nahrané dokumenty</h2>
-<table><tr><th>soubor</th><th class="n">velikost</th><th>kódování</th><th>uloženo</th></tr>
+<table><tr><th>soubor</th><th class="n">velikost</th><th>kódování</th><th>uloženo</th><th></th></tr>
 {% for u in items %}<tr>
 <td>{{ u.original_name }}<div class="meta"><code>{{ u.source_path }}</code></div></td>
 <td class="n">{{ (u.size_bytes / 1024) | round(1) }} kB</td>
 <td>{{ u.encoding }}</td>
 <td class="meta">{{ u.created_at.strftime("%d.%m. %H:%M") }} · {{ u.s3_profile }}</td>
+<td><form method="post" action="/nahrat/smazat" """ + SMAZAT_NAHRANY + """>
+<input type="hidden" name="upload_id" value="{{ u.id }}"><button>Smazat</button></form></td>
 </tr>{% endfor %}</table>{% endif %}"""
 
 
@@ -362,6 +367,31 @@ async def upload(soubor: UploadFile = File(...),
         log.exception("nahrani selhalo")
         return _stranka_nahrat(err="Nahrání selhalo: %s" % e)
     return _stranka_nahrat(ok=vysledek)
+
+
+@app.post("/nahrat/smazat")
+def upload_delete(upload_id: int = Form(...), kryton_session: str = Cookie(None)):
+    """Smaže dokument z hledání (soubor + řádek `upload`), NIKDY ze S3.
+
+    Pořadí je vědomé: nejdřív smazat řádek (atomicky vrátí source_path),
+    pak soubor, pak reindex. Kdyby cokoliv z posledních dvou kroků selhalo,
+    dokument aspoň zmizí z `/nahrat` a příště se dá smazat znovu (soubor
+    zmizelý ze stromu si reindex stejně domyslí); horší by bylo smazat
+    soubor a nechat po něm osiřelý řádek.
+    """
+    if not logged_in(kryton_session):
+        return RedirectResponse("/prihlasit", status_code=303)
+    source_path = db.delete_upload(upload_id)
+    if source_path:
+        try:
+            core.safe_path(source_path).unlink(missing_ok=True)
+        except ValueError as e:
+            # source_path pochazi z DB, ne primo od uzivatele, takze by
+            # tohle nemelo nastat - ale kdyby, aspon se vi proc soubor zustal.
+            log.warning("smazani souboru pro upload %s selhalo: %s", upload_id, e)
+        core.trigger_reindex()
+    log.info("smazan upload %s (%s)", upload_id, source_path or "nenalezen")
+    return RedirectResponse("/nahrat", status_code=303)
 
 
 HIST = """<h1>Historie</h1>

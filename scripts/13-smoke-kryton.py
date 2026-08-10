@@ -186,19 +186,36 @@ def _put_original(data, key, original_name, mime):
 storage.put_original = _put_original
 
 _uploads = []
+_upload_seq = [0]
 
 
 def _add_upload(**kw):
+    # ID stabilní přes UPSERT (stejný source_path = stejné ID, jako
+    # ON CONFLICT ... DO UPDATE ... RETURNING id v reálné DB), a NIKDY
+    # se neopakuje — `len(_uploads) + 1` po smazání/přepsání kolidovalo.
     kw = dict(kw)
     kw["created_at"] = datetime.now()
-    kw["id"] = len(_uploads) + 1
-    _uploads[:] = [u for u in _uploads if u["source_path"] != kw["source_path"]]
+    existing = next((u for u in _uploads if u["source_path"] == kw["source_path"]), None)
+    if existing:
+        kw["id"] = existing["id"]
+        _uploads.remove(existing)
+    else:
+        _upload_seq[0] += 1
+        kw["id"] = _upload_seq[0]
     _uploads.append(kw)
     return kw["id"]
 
 
+def _delete_upload(upload_id):
+    for i, u in enumerate(_uploads):
+        if u["id"] == upload_id:
+            return _uploads.pop(i)["source_path"]
+    return None
+
+
 db.add_upload = _add_upload
 db.uploads = lambda limit=200: list(reversed(_uploads))
+db.delete_upload = _delete_upload
 
 from fastapi.testclient import TestClient  # noqa: E402
 from app import main  # noqa: E402
@@ -536,6 +553,27 @@ fresh3 = TestClient(main.app)
 r = fresh3.post("/nahrat", files={"soubor": ("x.txt", b"data", "text/plain")},
                 follow_redirects=False)
 check("nahrávání vyžaduje přihlášení", r.headers.get("location") == "/prihlasit")
+
+print("== P3: mazání nahraného dokumentu (index ANO, S3 originál NIKDY) ==")
+cil = next(u for u in _uploads if u["source_path"].startswith("_uploads/pokus-"))
+cesta_pokus = Path(MD, cil["source_path"])
+check("soubor pokus.txt před smazáním existuje", cesta_pokus.exists(), str(cesta_pokus))
+
+fresh4 = TestClient(main.app)
+r = fresh4.post("/nahrat/smazat", data={"upload_id": cil["id"]}, follow_redirects=False)
+check("mazání bez přihlášení přesměruje", r.headers.get("location") == "/prihlasit")
+check("soubor bez přihlášení zůstal", cesta_pokus.exists())
+
+pocet_pred = len(_uploads)
+r = c.post("/nahrat/smazat", data={"upload_id": cil["id"]}, follow_redirects=False)
+check("POST /nahrat/smazat přesměruje na /nahrat",
+      r.status_code == 303 and r.headers.get("location") == "/nahrat", str(r.status_code))
+check("řádek zmizel z evidence", len(_uploads) == pocet_pred - 1)
+check("soubor zmizel z disku", not cesta_pokus.exists())
+check("S3 originál ZŮSTAL (nikdy se nemaže)", cil["s3_key"] in _s3)
+
+r = c.post("/nahrat/smazat", data={"upload_id": 999999}, follow_redirects=False)
+check("smazání neexistujícího id nespadne", r.status_code == 303)
 
 print("== ochrana cest ==")
 for bad in ["../mimo.md", "denik/../../mimo.md", ".git/config.md", "poznamka.txt"]:

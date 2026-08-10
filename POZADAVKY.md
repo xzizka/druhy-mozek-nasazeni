@@ -262,9 +262,53 @@ Požadavek, ne možnost, takže hned od začátku:
 1. ~~Jaké S3?~~ — Backblaze B2, ověřeno.
 2. ~~Kam s vytaženým textem?~~ — návrh B, k odsouhlasení.
 3. ~~Kdo dělá extrakci?~~ — Kryton, rezerva paměti stačí.
-4. **Mazat originál na S3 při smazání dokumentu?** Návrh: ne, jen odpojit.
+4. ~~Mazat originál na S3 při smazání dokumentu?~~ — ne, viz P3.
 5. **Zálohovat vytažený text**, když `_uploads/` bude mimo git?
 6. **Stropy** na velikost souboru a počet stránek?
 7. **`trust_level` nahraných dokumentů** — stejná důvěra jako vlastní
    poznámky, nebo nižší? Propisuje se do hledání přes `max_trust`.
 8. **Etapy** — jít po etapách 1–4, nebo rovnou všechny formáty naráz?
+
+---
+
+## P3 — Mazání nahraných dokumentů
+
+**Stav: HOTOVO (2026-08-10).**
+
+Zadání: co s dokumentem, který se nahraje a později se zjistí, že údaje
+z něj už nejsou relevantní? Do dneška to nešlo řešit jinak než ručně přes
+SSH — `/nahrat` dokumenty jen vypisoval, mazání nikde nebylo (na rozdíl
+od konverzací a metrik, které svoje „Smazat" už měly).
+
+Tři možnosti k odsouhlasení byly: (A) měkké vyřazení příznakem, beze
+smazání; (B) tvrdé smazání textu, indexu a záznamu, S3 originál trvale
+zachovat jako archiv; (C) totéž jako B, ale včetně S3 s počítáním odkazů.
+
+**Rozhodnuto: B.** Odpovídá tomu, co „už není relevantní" znamená — pryč
+z hledání, pryč ze seznamu — a nesahá na nevyřešený problém sdílených S3
+objektů (klíč je odvozený z obsahu, `originals/<sha256>`, takže jeden
+objekt může patřit víc řádkům `upload`; bezpečné mazání by vyžadovalo
+počítání odkazů). Je to i konzistentní s tím, jak se u vás už mažou
+konverzace — tvrdý `DELETE`, žádný příznak.
+
+Nová route `POST /nahrat/smazat` v Krytonovi: smaže řádek v tabulce
+`upload` (`db.delete_upload`, vrátí `source_path`), pak soubor
+z `_uploads/` (`core.safe_path` — stejná ochrana cest jako při zápisu),
+pak spustí reindex (`core.trigger_reindex`, fire-and-forget jako
+u `/zachytit`). **S3 originál se nedotýká — odnikud, nikdy.** Tlačítko
+„Smazat" u každého řádku v `/nahrat` s potvrzovacím dialogem, který
+tohle přímo říká.
+
+Pořadí kroků je vědomé: smazat řádek první (atomicky vrátí cestu), pak
+soubor, pak reindex. Selhání posledních dvou nejhůř ponechá soubor na
+disku o krok déle — horší by bylo smazat soubor a zůstat s osiřelým
+řádkem, který už nejde dohledat.
+
+`scripts/13-smoke-kryton.py` rozšířen o 8 kontrol (přihlášení vyžadováno,
+řádek i soubor zmizí, S3 originál zůstává, neexistující id nespadne).
+Cestou se našla a opravila latentní chyba ve stubu `_add_upload`: ID se
+počítalo z `len(_uploads) + 1` i po odstranění duplicity při UPSERTu,
+takže dva různé nahrané soubory mohly dostat stejné ID. Opraveno na
+stabilní ID přes UPSERT (stejný `source_path` = stejné ID) s monotónním
+čítačem pro nové řádky — věrněji odpovídá reálnému
+`ON CONFLICT ... RETURNING id` v Postgresu.
