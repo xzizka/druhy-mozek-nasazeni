@@ -115,3 +115,8 @@ TELEGRAM_ALLOWED_USER_ID = int(os.environ.get("TELEGRAM_ALLOWED_USER_ID", "0"))
 # Jak dlouho drží Telegram spojení otevřené při long pollingu, než vrátí
 # prázdnou odpověď. HTTP timeout na klientovi musí být delší (viz telegram.py).
 TELEGRAM_POLL_TIMEOUT = int(os.environ.get("TELEGRAM_POLL_TIMEOUT", "30"))
+
+# Krok 2: denní otázka. UTC, ne lokální čas — brain běží v UTC, jako
+# všechno ostatní v tomhle projektu (viz kryton-backup.timer). 6 UTC =
+# 8:00 letního času (CEST) — snadno změnitelné bez zásahu do kódu.
+TELEGRAM_DAILY_QUESTION_HOUR_UTC = int(os.environ.get("TELEGRAM_DAILY_QUESTION_HOUR_UTC", "6"))

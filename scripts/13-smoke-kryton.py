@@ -714,6 +714,20 @@ check("čerstvá zpráva (bez reply) jde do core.search+core.answer",
 
 core.config.TELEGRAM_BOT_TOKEN, core.config.TELEGRAM_ALLOWED_USER_ID = _puv_token, _puv_id
 
+print("== Telegram krok 2: plán denní otázky (čistá logika, bez sítě) ==")
+core.config.TELEGRAM_DAILY_QUESTION_HOUR_UTC = 6
+telegram._posledni_odeslano[0] = None
+check("před hodinou X se nepošle",
+      not telegram._mel_bych_poslat_otazku(datetime(2026, 1, 1, 5, 59, tzinfo=timezone.utc)))
+check("po hodině X se pošle (poprvé ten den)",
+      telegram._mel_bych_poslat_otazku(datetime(2026, 1, 1, 6, 0, tzinfo=timezone.utc)))
+telegram._posledni_odeslano[0] = datetime(2026, 1, 1).date()
+check("stejný den podruhé se nepošle",
+      not telegram._mel_bych_poslat_otazku(datetime(2026, 1, 1, 20, 0, tzinfo=timezone.utc)))
+check("další den po hodině X se pošle znovu",
+      telegram._mel_bych_poslat_otazku(datetime(2026, 1, 2, 6, 0, tzinfo=timezone.utc)))
+telegram._posledni_odeslano[0] = None
+
 print("== XSS / escaping ==")
 _msgs.clear()
 _add_message(CID, "user", "<script>alert(1)</script>")

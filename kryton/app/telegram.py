@@ -1,7 +1,7 @@
 """Telegram můstek: textové zprávy <-> core.capture / core.search+core.answer.
 
-KROK 1 z „jedno po druhém" — jen text. Denní otázka a hlas jsou další kroky,
-tenhle modul je jen kanál a routing.
+KROK 1 — jen text, kanál a routing. KROK 2 — denní otázka na plánovači
+(`daily_loop`), aby nemusela chodit ručně. Hlas je další krok, ještě nezačat.
 
 Long polling, ne webhook — brain nemá (a nemusí mít) veřejně dosažitelný
 HTTPS endpoint, který by Telegram potřeboval zavolat. Polling potřebuje jen
@@ -23,8 +23,10 @@ zpráva bez reply je „příkaz/dotaz" -> `core.search()` + `core.answer()`.
 from __future__ import annotations
 
 import logging
+import random
 import threading
 import time
+from datetime import datetime, timezone
 
 import httpx
 
@@ -144,10 +146,56 @@ def poll_loop() -> None:
             time.sleep(5)
 
 
+
+# --- KROK 2: denní otázka -----------------------------------------------
+# Malá rotující sada, ne LLM generování - jednoduché, bez ceny a latence
+# navíc. „Chytřejší" otázky (podle mezer v korpusu) jsou dalsí krok, az
+# tohle overi, ze samotne planovani ma smysl.
+DENNI_OTAZKY = [
+    "Co se ti dnes povedlo vyřešit nebo pochopit — a co by sis o tom "
+    "chtěl/a pamatovat i za měsíc, až to vyprchá z hlavy?",
+    "Co tě dnes nejvíc zaskočilo nebo tě přinutilo změnit názor?",
+    "Na čem dnes pracuješ a proč je to důležité — tobě, ne jen na papíře?",
+    "Jakou chybu jsi dnes udělal/a a co z ní plyne pro příště?",
+    "Co jsi se dnes naučil/a nového — technicky, nebo o sobě?",
+    "Co bys chtěl/a mít zapsané, kdyby sis zítra na dnešek nevzpomněl/a?",
+]
+
+_posledni_odeslano = [None]  # datetime.date | None; jen v pameti, viz docstring poll_loop
+
+
+def _mel_bych_poslat_otazku(now: datetime) -> bool:
+    if now.hour < config.TELEGRAM_DAILY_QUESTION_HOUR_UTC:
+        return False
+    return _posledni_odeslano[0] != now.date()
+
+
+def _posli_otazku_dne() -> None:
+    text = "🗓️ Otázka dne: %s" % random.choice(DENNI_OTAZKY)
+    _send(config.TELEGRAM_ALLOWED_USER_ID, text)
+    _posledni_odeslano[0] = datetime.now(timezone.utc).date()
+    log.info("telegram: otazka dne odeslana")
+
+
+def daily_loop() -> None:
+    """Kontroluje co 10 min, ne kazdou sekundu - staci, cas ve zprave neni
+    kriticky presny. Restart uprostred dne muze v nejhorsim pripade poslat
+    otazku podruhé - `_posledni_odeslano` zije jen v pameti, stejna uvaha
+    jako u offsetu v poll_loop (osobni bot, nizka cena chyby)."""
+    while True:
+        try:
+            if _mel_bych_poslat_otazku(datetime.now(timezone.utc)):
+                _posli_otazku_dne()
+        except Exception:
+            log.exception("telegram: denni otazka selhala, zkousim znovu pozdeji")
+        time.sleep(600)
+
+
 def start_background() -> None:
     if not enabled():
         log.info("telegram: TELEGRAM_BOT_TOKEN nebo TELEGRAM_ALLOWED_USER_ID "
                  "chybí, můstek vypnutý")
         return
     threading.Thread(target=poll_loop, daemon=True, name="telegram-poll").start()
-    log.info("telegram: poll loop spuštěn na pozadí")
+    threading.Thread(target=daily_loop, daemon=True, name="telegram-daily").start()
+    log.info("telegram: poll loop i denni otazka spusteny na pozadi")
