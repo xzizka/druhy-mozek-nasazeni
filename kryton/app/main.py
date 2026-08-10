@@ -18,6 +18,12 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("kryton")
 
+# httpx na INFO loguje "HTTP Request: <metoda> <URL> ...", a Telegram Bot
+# API nese token PŘÍMO V URL (https://api.telegram.org/bot<TOKEN>/metoda) -
+# na rozdíl od LiteLLM, kde klíč jde v Authorization hlavičce, ne v URL.
+# Bez tohohle by se token zapisoval do journalu při KAŽDÉM volání pollingu.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 app = FastAPI(title="Kryton", version="1.0")
 env = Environment(autoescape=True)   # autoescape: obsah poznámek jde do HTML
 COOKIE = "kryton_session"

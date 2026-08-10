@@ -44,10 +44,28 @@ def _call(method: str, http_timeout: float = 15, **params) -> dict:
     i klíč `timeout` — to je Telegramův vlastní parametr pro long polling,
     NEZAMĚŇOVAT s `http_timeout`, což je timeout HTTP klienta. Ten musí
     být delší, jinak httpx vyhodí chybu dřív, než Telegram stihne odpovědět.
+
+    VŠECHNY výjimky z httpx se tady zachytávají a nahrazují vlastní zprávou.
+    Telegram Bot API nese token PŘÍMO V URL (na rozdíl od LiteLLM, kde jde
+    v Authorization hlavičce) — `r.raise_for_status()` i syrová httpx
+    výjimka by ho vložily do textu chyby, a `log.exception()` v poll_loop()
+    by ho pak zapsal do journalu při každém síťovém zádrhelu.
+
+    RAISE MUSÍ BÝT MIMO `except` BLOK. `raise ... from None` sice potlačí
+    VÝPIS chained výjimky, ale `__context__` v paměti pořád drží tu
+    původní (s tokenem v URL) — ověřeno testem, který přesně tohle chytil.
+    Jen po ÚPLNÉM opuštění except bloku (žádná aktivní obsluha výjimky)
+    zůstane nová výjimka bez cizího __context__ i __cause__.
     """
-    r = httpx.post(API % (config.TELEGRAM_BOT_TOKEN, method), json=params,
-                   timeout=http_timeout)
-    r.raise_for_status()
+    try:
+        r = httpx.post(API % (config.TELEGRAM_BOT_TOKEN, method), json=params,
+                       timeout=http_timeout)
+    except httpx.HTTPError:
+        r = None
+    if r is None:
+        raise RuntimeError("Telegram API %s: chyba spojeni" % method)
+    if r.status_code != 200:
+        raise RuntimeError("Telegram API %s: HTTP %d" % (method, r.status_code))
     d = r.json()
     if not d.get("ok"):
         raise RuntimeError("Telegram API %s: %s" % (method, d))

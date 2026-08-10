@@ -640,6 +640,32 @@ for bad in ["../mimo.md", "denik/../../mimo.md", ".git/config.md", "poznamka.txt
 
 print("== Telegram můstek (krok 1: jen text) ==")
 from app import telegram  # noqa: E402
+import httpx as _httpx  # noqa: E402
+
+# NEJDŘÍV test na SKUTEČNÉ (neopatchované) _call — ověřuje přesně tu chybu,
+# která se stala živě: httpx nese token přímo v URL a `log.exception()`
+# by ho jinak zapsal do journalu při každém síťovém zádrhelu.
+_TAJNY_MARKER = "TAJNY-TOKEN-MARKER-x7z9"
+_puv_httpx_post = _httpx.post
+
+
+def _boom(*a, **kw):
+    raise _httpx.HTTPError(
+        "mock chyba s url https://api.telegram.org/bot%s/getUpdates" % _TAJNY_MARKER)
+
+
+_httpx.post = _boom
+_puv_token0 = core.config.TELEGRAM_BOT_TOKEN
+core.config.TELEGRAM_BOT_TOKEN = _TAJNY_MARKER
+try:
+    telegram._call("getUpdates", timeout=0)
+    check("_call vyhodí výjimku při síťové chybě", False, "neshodilo se")
+except RuntimeError as e:
+    text_vyjimky = str(e) + str(e.__cause__ or "") + str(e.__context__ or "")
+    check("chybová zpráva (vč. chained cause/context) neobsahuje token",
+          _TAJNY_MARKER not in text_vyjimky, text_vyjimky)
+_httpx.post = _puv_httpx_post
+core.config.TELEGRAM_BOT_TOKEN = _puv_token0
 
 _tg_sent = []
 telegram._call = lambda method, http_timeout=15, **params: (
