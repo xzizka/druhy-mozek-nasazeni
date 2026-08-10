@@ -648,14 +648,59 @@ odhalila, jsou body 6 a 7 výš.
 
    **V repozitáři nejsou žádné secrets** a nemají tam být — hesla i API klíče
    jdou přes podman secrets a odkazy `os.environ/` v `litellm-config.yaml`
-   (ověřeno grepem před prvním commitem). Jejich ztráta ale znamená
-   přegenerovat hesla k DB a znovu vydat klíče (OpenRouter, OpenCode Zen),
-   a **tuhle mezeru git neuzavírá**.
+   (ověřeno grepem před prvním commitem). **Tuhle mezeru git neuzavíral —
+   od 2026-08-10 ji zavírá `scripts/19-kryton-backup.sh`**, viz bod 10 níž.
 
    Databáze `retrieval` zálohu nepotřebuje — je to derivovaný index a dá se
-   kdykoliv postavit znovu z markdownu. Databáze `kryton` derivovaná **nebude**
-   (historie konverzací), takže až Kryton pojede, bude potřebovat vlastní zálohu.
+   kdykoliv postavit znovu z markdownu.
 9. **První naplnění skutečným korpusem.** Až přibudou opravdové poznámky,
    pusť `scripts/08-first-fill.sh` (drop HNSW → naplnit → postavit → VACUUM).
    Nad korpusem bez frontmatteru zvaž `DETECT_LANG_ENABLED=0` — detekce stojí
    ~2–3 s na dokument a jazyk jde doplnit později zadarmo (viz `PIPELINE.md`).
+10. ~~Databáze `kryton` derivovaná nebude, bude potřebovat vlastní zálohu~~ —
+    **hotovo 2026-08-10.** `scripts/19-kryton-backup.sh` + denní systemd timer
+    `kryton-backup.timer` (03:15 UTC, `scripts/20-kryton-backup-setup.sh`).
+
+    Rozsah je širší, než jen „data": zadání bylo, aby se z zálohy dal obnovit
+    i **systém**, ne jen obsah. To znamenalo tři věci najednou:
+
+    - `pg_dump -Fc` databází **`kryton`** (konverzace, nahrávky) a **`litellm`**
+      (virtuální klíče, rozpočty, spend logy — bez ní by po obnově chyběly
+      definice `cheap`/`workhorse`/`reasoning`). Databáze `retrieval` v záloze
+      záměrně chybí — je derivovaná, viz bod 8 výš.
+    - **Šifrovaný balíček všech podman secrets** kromě šifrovacího klíče
+      samotného (kruhová závislost). I „privátní" S3 bucket není místo pro
+      čitelná hesla.
+    - Uloženo na S3 přes stejný profil jako originály z P2/P3 (`app/storage.py`,
+      nové `put_backup`/`get_backup`/`list_backups`/`delete_backup`), jen jiný
+      prefix (`BACKUP_S3_PREFIX`, výchozí `db-backups/`) a volitelně jiný
+      bucket (`BACKUP_S3_BUCKET`, prázdné = stejný jako `S3_BUCKET`) — „do
+      budoucna konfigurovatelné" bez nové abstrakce.
+
+    **Klíčová vlastnost: ověření obnovy při KAŽDÉM běhu, ne jen při nasazení.**
+    Netestovaná záloha je schrödingerovská záloha. Skript po každém uploadu
+    dump stáhne zpět, obnoví do zahoditelné DB a porovná počty řádků VE
+    VŠECH tabulkách — dynamicky přes `information_schema`, ne napevno
+    vypsaná jména, protože `litellm` má 69 tabulek generovaných Prismou.
+    Ověřeno živě 2026-08-10: všech 6 tabulek `kryton` i všech 69 tabulek
+    `litellm` sedí, sada 19 secrets po dešifrování sedí. Rotace starých
+    záloh (`BACKUP_RETENTION_DAYS`, výchozí 30) běží AŽ PO ověřené obnově,
+    aby selhání aktuálního běhu nikdy nesmazalo poslední funkční zálohu.
+
+    **Past, na kterou stojí za to pamatovat:** `podman exec -i` uvnitř
+    `while read ... < <(process substitution)` sdílí stdin s tou substitucí.
+    První živý běh proto ověřil jen JEDNU tabulku z šesti/69 místo všech —
+    smyčka se provedla jednou a tiše skončila, `pg_restore` přitom neselhal,
+    takže by to bez pozorného čtení výstupu prošlo jako úspěch. Oprava:
+    `</dev/null` na vnořených voláních.
+
+    **Šifrovací klíč (`podman secret backup_encryption_key`) žije jen na
+    brainu a MUSÍ mít kopii mimo něj** (password manager) — bez ní je záloha
+    secrets k ničemu, kdyby brain fyzicky zmizel. Databázové dumpy na tomto
+    klíči nezávisí. Vygenerován a vypsán jednou 2026-08-10; `setup` skript ho
+    už nikdy nepřegeneruje (rozbilo by to čitelnost starých záloh).
+
+    **Co záloha řeší jen zčásti:** OpenRouter a OpenCode Zen API klíče zálohou
+    procházejí (jsou to jen secrets), ale ztráta brainu je nerozbije — zůstávají
+    platné u poskytovatele bez ohledu na to. Záloha je tu pro pohodlí (nemusí se
+    ručně dohledávat staré hodnoty), ne proto, že by bez ní přestaly fungovat.
