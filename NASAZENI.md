@@ -440,7 +440,10 @@ záměrně nechává, jsou znovupoužitelné, a mažou se ručně.
 dokumentů. DB 1170 MB, z toho `chunk_embedding_hnsw` 295 MB, `chunk_trgm_gin`
 154 MB, `chunk_tsv_gin` 63 MB. **Stavba HNSW nad 114 tisíci chunky trvala 27 s.**
 
-**Přesnost s known-good dokumentem** (10 dotazů na jazyk, dotazy z korpusu):
+**Přesnost s known-good dokumentem, měřeno BEZ reranku** (10 dotazů na jazyk,
+dotazy z korpusu). Ta podmínka je podstatná a v reportu se snadno přehlédne —
+`corpus_measure.py` volá `/search` s `"rerank": False`, takže tahle tabulka
+říká, jak dobrá je samotná RRF fúze, ne nasazená pipeline:
 
 | jazyk | top-1 | MRR |
 |---|---|---|
@@ -542,10 +545,17 @@ odhalila, jsou body 6 a 7 výš.
    Interaktivně je 26 s nepoužitelné.
 
    Rozhodnout se ale nedá bez čísla, které zatím nikdo nezměřil: **kolik
-   reranking nad RRF fúzí vlastně přidává kvality.** `scripts/06-eval-reranker.py`
-   na to je, ale měřil taky jen krátké dokumenty. Než se sníží `top_k`, stojí
-   za to ho pustit nad reálným korpusem — rozdíl mezi 2,3 s a 26 s je tak velký,
-   že si zaslouží měření, ne odhad.
+   reranking nad RRF fúzí vlastně přidává kvality.** Oddíl 3 reportu měří
+   `"rerank": False`, oddíl 4 měří jen latenci — kvalita s rerankem tedy dosud
+   změřená nebyla vůbec.
+
+   `scripts/06-eval-reranker.py` na tohle **není**: měří reranker izolovaně,
+   sedm dotazů nad osmi krátkými vymyšlenými větami poslanými přímo na Infinity.
+   Je to srovnání dvou modelů rerankeru (a v té roli posloužil), ne měření
+   přínosu v pipeline; dokumenty má natvrdo v kódu, nad korpusem ho pustit nejde.
+
+   Chybějící stranu doplňuje **`scripts/16-rerank-value.py`** — tytéž dotazy
+   jako oddíl 3, párově přes `bez reranku / top_k=10 / top_k=20`.
 3. ~~Dodat skutečné OpenRouter a bigpickle klíče~~ — hotovo, ověřeno.
 4. ~~Vícejazyčnost (cs, en, de, la)~~ — hotovo a ověřené na čtyřech poznámkách,
    viz `PIPELINE.md` a `scripts/09-multilang-test.py`.
