@@ -108,8 +108,12 @@ backup_db() {
     # napevno vypsane jmena - litellm ma 69 tabulek generovanych Prismou.
     while IFS= read -r TBL; do
         [ -z "$TBL" ] && continue
-        ZIVA=$($PG -d "$DB" -tAc "SELECT count(*) FROM ${TBL};" 2>/dev/null || echo "?")
-        OBNOVENA=$($PG -d "$SCRATCH" -tAc "SELECT count(*) FROM ${TBL};" 2>/dev/null || echo "?")
+        # </dev/null je NUTNE: `podman exec -i` uvnitr tehle smycky by jinak
+        # sdilel stdin s `< <(...)` procesni substitucí nize a vycerpal by ho
+        # po prvni tabulce - presne tak se to prvni beh chytilo (1 tabulka
+        # z 6/69 misto vsech).
+        ZIVA=$($PG -d "$DB" -tAc "SELECT count(*) FROM ${TBL};" </dev/null 2>/dev/null || echo "?")
+        OBNOVENA=$($PG -d "$SCRATCH" -tAc "SELECT count(*) FROM ${TBL};" </dev/null 2>/dev/null || echo "?")
         if [ "$ZIVA" = "$OBNOVENA" ]; then
             echo "  OK    $TBL: $ZIVA řádků"
         else
