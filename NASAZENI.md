@@ -544,18 +544,57 @@ odhalila, jsou body 6 a 7 výš.
    řídí objemem textu, ne počtem kandidátů, a reálné chunky jsou mnohem delší.
    Interaktivně je 26 s nepoužitelné.
 
-   Rozhodnout se ale nedá bez čísla, které zatím nikdo nezměřil: **kolik
-   reranking nad RRF fúzí vlastně přidává kvality.** Oddíl 3 reportu měří
-   `"rerank": False`, oddíl 4 měří jen latenci — kvalita s rerankem tedy dosud
-   změřená nebyla vůbec.
+   Druhá strana rovnice — **kolik reranking nad RRF fúzí přidává kvality** —
+   dosud změřená nebyla vůbec: oddíl 3 reportu měří `"rerank": False`, oddíl 4
+   jen latenci.
 
-   `scripts/06-eval-reranker.py` na tohle **není**: měří reranker izolovaně,
-   sedm dotazů nad osmi krátkými vymyšlenými větami poslanými přímo na Infinity.
-   Je to srovnání dvou modelů rerankeru (a v té roli posloužil), ne měření
-   přínosu v pipeline; dokumenty má natvrdo v kódu, nad korpusem ho pustit nejde.
+   `scripts/06-eval-reranker.py` na tohle **není**, i když to podle názvu
+   vypadá: měří reranker izolovaně, sedm dotazů nad osmi krátkými vymyšlenými
+   větami poslanými přímo na Infinity. Jako srovnání dvou modelů rerankeru
+   posloužil, o přínosu v pipeline neříká nic; dokumenty má natvrdo v kódu.
 
-   Chybějící stranu doplňuje **`scripts/16-rerank-value.py`** — tytéž dotazy
-   jako oddíl 3, párově přes `bez reranku / top_k=10 / top_k=20`.
+   ### Změřeno 2026-08-10: `scripts/16-rerank-value.py`
+
+   47 dotazů (12 na jazyk, jeden bez použitelných klíčových slov vypadl),
+   párově — každý dotaz prošel všemi konfiguracemi nad týmž indexem:
+
+   | konfigurace | top-1 | MRR | medián latence |
+   |---|---|---|---|
+   | bez reranku | **44/47 (94 %)** | **0,968** | **2,26 s** |
+   | rerank 10 | 40/47 (85 %) | 0,922 | 13,99 s |
+   | rerank 20 | 40/47 (85 %) | 0,920 | 23,92 s |
+
+   Párově: **zlepšilo 2 dotazy, zhoršilo 6, beze změny 39** — stejně v obou
+   konfiguracích a ve všech čtyřech jazycích stejným směrem.
+
+   **Tenhle výsledek se ale nesmí číst jako „reranking je k ničemu",** protože
+   měření je k němu ze tří důvodů nespravedlivé:
+
+   1. **Dotazy nejsou otázky.** `make_keywords()` vezme šest dlouhých slov
+      přímo z cílového chunku — pytel vzácných slov opsaný z hledaného textu.
+      Ideální vstup pro lexikální a fuzzy větev, skoro nejhorší možný pro
+      sémantický cross-encoder. Metodika je převzatá z oddílu 3 kvůli
+      srovnatelnosti a její vychýlení se přeneslo s ní.
+   2. **Základ je u stropu.** 44/47 nenechává kam se zlepšovat; rerank už může
+      jen jinak rozhodovat remízy, a v šesti případech rozhodl hůř.
+   3. **6 proti 2 není průkazné.** Znaménkový test nad osmi rozdílnými páry
+      dává p ≈ 0,29. Neříká to „rerank škodí", ale „přínos se nenašel".
+
+   Pevné z toho je jediné, zato dost: **na tomhle typu dotazů si reranking
+   nezasloužil ani vteřinu z těch 21,7.**
+
+   ### Co tím pořád není zodpovězené
+
+   Skutečné použití je **přirozená otázka nad osobními poznámkami** — přesně
+   režim, kde cross-encoder pomáhá nejvíc a kde je pytel klíčových slov nejméně
+   reprezentativní. Živý test Krytona („čím se ladí latence dotazu u HNSW")
+   ten režim trefil, běžel **s** rerankem a vrátil správný dokument první.
+
+   Rozhodne až sada přirozených otázek s known-good dokumentem. Nad korpusem
+   beletrie se nevyrobí dobře — je to další důvod, proč je nejcennější věcí
+   dostat do systému skutečné poznámky. **Do té doby nesnižovat `RERANK_TOP_K`
+   naslepo**; co je změřené, platí o lexikálních dotazech, ne o těch, které
+   do Krytona chodí.
 3. ~~Dodat skutečné OpenRouter a bigpickle klíče~~ — hotovo, ověřeno.
 4. ~~Vícejazyčnost (cs, en, de, la)~~ — hotovo a ověřené na čtyřech poznámkách,
    viz `PIPELINE.md` a `scripts/09-multilang-test.py`.
