@@ -95,6 +95,52 @@ def _ascii_metadata(value: str) -> str:
     return out[:200] or "bez-nazvu"
 
 
+def _backup_bucket() -> str:
+    return config.BACKUP_S3_BUCKET or config.S3_BUCKET
+
+
+def put_backup(data: bytes, key: str) -> None:
+    """Uloží zálohu (DB dump nebo šifrovaný balík secrets).
+
+    Na rozdíl od `put_original` PŘEPISUJE bez podmínky — klíč nese
+    timestamp, ne hash obsahu, takže žádná deduplikace nemá smysl a stejný
+    klíč by v praxi nikdy nemělo vzniknout dvakrát.
+    """
+    client().put_object(Bucket=_backup_bucket(), Key=key, Body=data,
+                        ContentType="application/octet-stream")
+
+
+def get_backup(key: str) -> bytes:
+    r = client().get_object(Bucket=_backup_bucket(), Key=key)
+    return r["Body"].read()
+
+
+def list_backups(prefix: str | None = None) -> list[dict]:
+    """Zálohy pod prefixem (výchozí `BACKUP_S3_PREFIX`), od nejstarší.
+
+    Paginuje explicitně — `list_objects_v2` vrací nejvýš 1000 klíčů na
+    stránku, a s denními zálohami víc DB se to jednou za pár let stane.
+    """
+    out = []
+    token = None
+    while True:
+        kw = {"Bucket": _backup_bucket(), "Prefix": prefix or config.BACKUP_S3_PREFIX}
+        if token:
+            kw["ContinuationToken"] = token
+        r = client().list_objects_v2(**kw)
+        out.extend({"key": o["Key"], "size": o["Size"], "last_modified": o["LastModified"]}
+                   for o in r.get("Contents", []))
+        if not r.get("IsTruncated"):
+            break
+        token = r["NextContinuationToken"]
+    out.sort(key=lambda o: o["last_modified"])
+    return out
+
+
+def delete_backup(key: str) -> None:
+    client().delete_object(Bucket=_backup_bucket(), Key=key)
+
+
 def check() -> str:
     """Dostupnost úložiště. Vrací krátký popis, nebo vyhodí výjimku.
 

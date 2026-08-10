@@ -95,3 +95,11 @@ S3_REGION = os.environ.get("S3_REGION", "")
 S3_ACCESS_KEY_ID = os.environ.get("S3_ACCESS_KEY_ID", "")
 S3_SECRET_ACCESS_KEY = os.environ.get("S3_SECRET_ACCESS_KEY", "")
 S3_KEY_PREFIX = os.environ.get("S3_KEY_PREFIX", "originals/")
+
+# Zálohy DB (kryton, litellm) a šifrovaného balíku secrets. Prázdný bucket
+# = stejný jako S3_BUCKET — oddělené jméno je jen kvůli budoucí možnosti
+# přepnout zálohy na jiný bucket bez zásahu do kódu, ne proto, že by se
+# to dělalo dnes. Prefix odděluje obor klíčů od `S3_KEY_PREFIX` (originály).
+BACKUP_S3_BUCKET = os.environ.get("BACKUP_S3_BUCKET", "")
+BACKUP_S3_PREFIX = os.environ.get("BACKUP_S3_PREFIX", "db-backups/")
+BACKUP_RETENTION_DAYS = int(os.environ.get("BACKUP_RETENTION_DAYS", "30"))

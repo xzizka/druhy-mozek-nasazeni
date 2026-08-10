@@ -2,7 +2,10 @@
 # BUILD: podman build --network=host -t localhost/kryton:latest -f Containerfile .
 FROM docker.io/library/python:3.13-slim
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
-RUN set -eux; apt-get update; apt-get install -y --no-install-recommends curl; \
+# openssl navic kvuli curl: sifrovani zalohy podman secrets pred uploadem
+# na S3 (scripts/19-kryton-backup.sh) - pbkdf2 + aes-256-cbc, klic mimo obraz
+# (podman secret backup_encryption_key, viz scripts/20-kryton-backup-setup.sh).
+RUN set -eux; apt-get update; apt-get install -y --no-install-recommends curl openssl; \
     rm -rf /var/lib/apt/lists/*
 WORKDIR /srv
 COPY requirements.txt .

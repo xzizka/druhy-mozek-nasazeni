@@ -422,6 +422,15 @@ Environment=S3_ENDPOINT=https://s3.eu-central-003.backblazeb2.com
 Environment=S3_BUCKET=second-brain-kryton
 Secret=s3_access_key_id,type=env,target=S3_ACCESS_KEY_ID
 Secret=s3_secret_access_key,type=env,target=S3_SECRET_ACCESS_KEY
+# Zaloha DB (kryton, litellm) a sifrovaneho balicku secrets, viz
+# scripts/19-kryton-backup.sh a scripts/20-kryton-backup-setup.sh.
+# BACKUP_S3_BUCKET prazdny = stejny jako S3_BUCKET (viz config.py).
+Environment=BACKUP_S3_PREFIX=db-backups/
+Environment=BACKUP_RETENTION_DAYS=30
+# type=mount, ne env: openssl cte klic jako soubor (-pass file:...), ne
+# jako promennou prostredi - zabranuje se tim naslednemu logovani hodnoty
+# pri pripadnem `env` vypisu procesu.
+Secret=backup_encryption_key,type=mount,target=backup_encryption_key
 # ZMENA proti navrhu: puvodne PublishPort=100.64.0.1:3001:3001, tedy jen na
 # Tailscale adresu. Dohodnuto publikovat i na homelab LAN 10.20.0.0/24, a
 # protoze DHCP i Tailscale adresa jsou dynamicke, bindujeme 0.0.0.0.

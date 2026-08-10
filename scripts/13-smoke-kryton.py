@@ -19,7 +19,7 @@ Návratový kód 0 = vše prošlo, 1 = něco selhalo.
 import os
 import sys
 import tempfile
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 # Zdrojáky Krytona jsou vedle scripts/, ale v kontejneru bývají jinde.
@@ -184,6 +184,34 @@ def _put_original(data, key, original_name, mime):
 
 
 storage.put_original = _put_original
+
+_backups = {}   # key -> (data, last_modified)
+
+
+def _put_backup(data, key):
+    _backups[key] = (data, datetime.now(timezone.utc))
+
+
+def _get_backup(key):
+    return _backups[key][0]
+
+
+def _list_backups(prefix=None):
+    prefix = prefix or storage.config.BACKUP_S3_PREFIX
+    return sorted(
+        [{"key": k, "size": len(v[0]), "last_modified": v[1]}
+         for k, v in _backups.items() if k.startswith(prefix)],
+        key=lambda b: b["last_modified"])
+
+
+def _delete_backup(key):
+    _backups.pop(key, None)
+
+
+storage.put_backup = _put_backup
+storage.get_backup = _get_backup
+storage.list_backups = _list_backups
+storage.delete_backup = _delete_backup
 
 _uploads = []
 _upload_seq = [0]
@@ -501,6 +529,33 @@ check("region se odvodí z endpointu", storage.region() == "eu-central-003",
 storage.config.S3_REGION = "rucne-zadany"
 check("ručně zadaný region má přednost", storage.region() == "rucne-zadany")
 storage.config.S3_ENDPOINT, storage.config.S3_REGION = _puv_ep, _puv_reg
+
+print("== zálohy DB a secrets (app/storage.py) ==")
+K1 = storage.config.BACKUP_S3_PREFIX + "kryton/kryton-cerstva.dump"
+K2 = storage.config.BACKUP_S3_PREFIX + "kryton/kryton-stara.dump"
+K3 = storage.config.BACKUP_S3_PREFIX + "litellm/litellm-cerstva.dump"
+
+storage.put_backup(b"cerstvy dump", K1)
+check("put_backup + get_backup je round-trip", storage.get_backup(K1) == b"cerstvy dump")
+
+storage.put_backup(b"stary dump", K2)
+_backups[K2] = (b"stary dump", datetime.now(timezone.utc) - timedelta(days=40))
+storage.put_backup(b"jiny prefix", K3)
+
+seznam = storage.list_backups(storage.config.BACKUP_S3_PREFIX + "kryton/")
+check("list_backups filtruje podle prefixu", {b["key"] for b in seznam} == {K1, K2},
+      str(seznam))
+check("list_backups seřadí od nejstarší", [b["key"] for b in seznam] == [K2, K1],
+      str([b["key"] for b in seznam]))
+
+hranice = datetime.now(timezone.utc) - timedelta(days=30)
+stare = [b for b in seznam if b["last_modified"] < hranice]
+check("retenční filtr najde přesně jednu starou zálohu",
+      len(stare) == 1 and stare[0]["key"] == K2, str(stare))
+for b in stare:
+    storage.delete_backup(b["key"])
+check("delete_backup smazal starou, čerstvá i jiný prefix zůstaly",
+      K2 not in _backups and K1 in _backups and K3 in _backups)
 
 print("== P2: celý tok nahrání ==")
 DATA = "# Poznámka\n\nObsah nahraného dokumentu.\n".encode("utf-8")
