@@ -117,6 +117,7 @@ TELEGRAM_ALLOWED_USER_ID = int(os.environ.get("TELEGRAM_ALLOWED_USER_ID", "0"))
 TELEGRAM_POLL_TIMEOUT = int(os.environ.get("TELEGRAM_POLL_TIMEOUT", "30"))
 
 # Krok 2: denní otázka. UTC, ne lokální čas — brain běží v UTC, jako
-# všechno ostatní v tomhle projektu (viz kryton-backup.timer). 6 UTC =
-# 8:00 letního času (CEST) — snadno změnitelné bez zásahu do kódu.
-TELEGRAM_DAILY_QUESTION_HOUR_UTC = int(os.environ.get("TELEGRAM_DAILY_QUESTION_HOUR_UTC", "6"))
+# všechno ostatní v tomhle projektu (viz kryton-backup.timer). 18 UTC =
+# 20:00 letního času (CEST). POZOR: neni DST-aware, v zime (CET, UTC+1)
+# se posune fakticky na 19:00 mistniho — snadno zmenitelne bez zasahu do kodu.
+TELEGRAM_DAILY_QUESTION_HOUR_UTC = int(os.environ.get("TELEGRAM_DAILY_QUESTION_HOUR_UTC", "18"))

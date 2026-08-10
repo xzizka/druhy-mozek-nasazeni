@@ -436,8 +436,9 @@ Secret=backup_encryption_key,type=mount,target=backup_encryption_key
 # KAZDE prichozi zprave. Bez ni by bot odpovidal komukoliv, kdo ho najde.
 Environment=TELEGRAM_ALLOWED_USER_ID=819345451
 Secret=telegram_bot_token,type=env,target=TELEGRAM_BOT_TOKEN
-# Krok 2: denni otazka, UTC (6 = 8:00 CEST).
-Environment=TELEGRAM_DAILY_QUESTION_HOUR_UTC=6
+# Krok 2: denni otazka, UTC (18 = 20:00 CEST). POZOR: hodina neni DST-aware,
+# az se v rijnu vrati CET (UTC+1), posune se fakticky na 19:00 mistniho.
+Environment=TELEGRAM_DAILY_QUESTION_HOUR_UTC=18
 # ZMENA proti navrhu: puvodne PublishPort=100.64.0.1:3001:3001, tedy jen na
 # Tailscale adresu. Dohodnuto publikovat i na homelab LAN 10.20.0.0/24, a
 # protoze DHCP i Tailscale adresa jsou dynamicke, bindujeme 0.0.0.0.
