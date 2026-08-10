@@ -638,6 +638,56 @@ for bad in ["../mimo.md", "denik/../../mimo.md", ".git/config.md", "poznamka.txt
     except ValueError:
         check(f"safe_path odmítne {bad!r}", True)
 
+print("== Telegram můstek (krok 1: jen text) ==")
+from app import telegram  # noqa: E402
+
+_tg_sent = []
+telegram._call = lambda method, http_timeout=15, **params: (
+    _tg_sent.append((method, params)) or [])
+
+_puv_token, _puv_id = core.config.TELEGRAM_BOT_TOKEN, core.config.TELEGRAM_ALLOWED_USER_ID
+core.config.TELEGRAM_BOT_TOKEN, core.config.TELEGRAM_ALLOWED_USER_ID = "", 0
+check("enabled() je False bez tokenu/id", not telegram.enabled())
+core.config.TELEGRAM_BOT_TOKEN, core.config.TELEGRAM_ALLOWED_USER_ID = "test-token", 819345451
+check("enabled() je True s tokenem i id", telegram.enabled())
+
+BOT_MSG = {"from": {"is_bot": True}}
+check("_je_odpoved_na_bota pozná reply na bota",
+      telegram._je_odpoved_na_bota({"reply_to_message": BOT_MSG}))
+check("_je_odpoved_na_bota odmítne reply na člověka",
+      not telegram._je_odpoved_na_bota({"reply_to_message": {"from": {"is_bot": False}}}))
+check("_je_odpoved_na_bota odmítne zprávu bez reply",
+      not telegram._je_odpoved_na_bota({}))
+
+_tg_sent.clear()
+telegram._handle_message({"from": {"id": 999999}, "chat": {"id": 999999},
+                          "text": "cizí zpráva"})
+check("neautorizovaný uživatel se ignoruje (nic se nepošle)", _tg_sent == [], str(_tg_sent))
+
+_tg_sent.clear()
+telegram._handle_message({"from": {"id": 819345451}, "chat": {"id": 819345451},
+                          "sticker": {}})
+check("zpráva bez textu dostane placeholder o hlasu",
+      len(_tg_sent) == 1 and "hlas" in _tg_sent[0][1]["text"], str(_tg_sent))
+
+_tg_sent.clear()
+ZNACKA = "TELEGRAM-ODPOVED-ZNACKA-8b3f"
+telegram._handle_message({"from": {"id": 819345451}, "chat": {"id": 819345451},
+                          "text": ZNACKA, "reply_to_message": BOT_MSG})
+check("reply na bota jde do core.capture, ne do core.answer",
+      len(_tg_sent) == 1 and "Zaznamenáno" in _tg_sent[0][1]["text"], str(_tg_sent))
+soubory = list(Path(MD, "denik").glob("*.md")) if Path(MD, "denik").exists() else []
+check("zaznamenaný text se opravdu zapsal na disk",
+      any(ZNACKA in f.read_text(encoding="utf-8") for f in soubory), str(soubory))
+
+_tg_sent.clear()
+telegram._handle_message({"from": {"id": 819345451}, "chat": {"id": 819345451},
+                          "text": "čerstvý dotaz bez reply"})
+check("čerstvá zpráva (bez reply) jde do core.search+core.answer",
+      len(_tg_sent) == 1 and "Odpověď s citací" in _tg_sent[0][1]["text"], str(_tg_sent))
+
+core.config.TELEGRAM_BOT_TOKEN, core.config.TELEGRAM_ALLOWED_USER_ID = _puv_token, _puv_id
+
 print("== XSS / escaping ==")
 _msgs.clear()
 _add_message(CID, "user", "<script>alert(1)</script>")

@@ -103,3 +103,15 @@ S3_KEY_PREFIX = os.environ.get("S3_KEY_PREFIX", "originals/")
 BACKUP_S3_BUCKET = os.environ.get("BACKUP_S3_BUCKET", "")
 BACKUP_S3_PREFIX = os.environ.get("BACKUP_S3_PREFIX", "db-backups/")
 BACKUP_RETENTION_DAYS = int(os.environ.get("BACKUP_RETENTION_DAYS", "30"))
+
+# Telegram můstek (krok 1: jen text — core.capture / core.search+core.answer).
+# Prázdný token nebo nulové ID = vypnuto, žádné volání na Telegram API.
+#
+# TELEGRAM_ALLOWED_USER_ID je JEDINÁ autentizace kanálu — bez ní by bot
+# odpovídal komukoliv, kdo ho na Telegramu najde. Kontroluje se na KAŽDÉ
+# zprávě v telegram.py, ne jen jednou při startu.
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_ALLOWED_USER_ID = int(os.environ.get("TELEGRAM_ALLOWED_USER_ID", "0"))
+# Jak dlouho drží Telegram spojení otevřené při long pollingu, než vrátí
+# prázdnou odpověď. HTTP timeout na klientovi musí být delší (viz telegram.py).
+TELEGRAM_POLL_TIMEOUT = int(os.environ.get("TELEGRAM_POLL_TIMEOUT", "30"))

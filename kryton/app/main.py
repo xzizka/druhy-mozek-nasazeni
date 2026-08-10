@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from jinja2 import Environment
 from markupsafe import Markup
 
-from . import analytics, config, core, db, ingest, storage
+from . import analytics, config, core, db, ingest, storage, telegram
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -86,11 +86,13 @@ def _startup():
                            "nespoustim se bez autentizace")
     db.init()
     analytics.init()
-    log.info("start: retrieval=%s litellm=%s model=%s analytika=%s uloziste=%s",
+    telegram.start_background()
+    log.info("start: retrieval=%s litellm=%s model=%s analytika=%s uloziste=%s telegram=%s",
              config.RETRIEVAL_URL, config.LITELLM_URL, config.ANSWER_MODEL,
              "zapnuta" if analytics.enabled() else "vypnuta",
              ("%s/%s" % (config.S3_PROFILE, config.S3_BUCKET))
-             if storage.enabled() else "vypnuto")
+             if storage.enabled() else "vypnuto",
+             "zapnuty" if telegram.enabled() else "vypnuty")
 
 
 @app.on_event("shutdown")
