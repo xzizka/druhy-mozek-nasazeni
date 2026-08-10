@@ -97,6 +97,16 @@ model_list:
       # Odmitnuti kandidati: granite-4.0-h-micro urcil cestinu jako anglictinu,
       # ling-3.0-flash a qwen3.7-flash vraceji prazdny content (reasoning
       # modely utrati max_tokens na uvahu - tataz past jako u big-pickle).
+      #
+      # DOMERENO 2026-08-10 (scripts/17-eval-cheap-models.py): ministral-3b-2512
+      # a ministral-8b-2512 nezaujaty. Latence 2x nizsi (median 0,38-0,39 s),
+      # ale drazsi (0,10-0,15 $/M proti 0,01-0,03 $/M u ling) a horsi presnost
+      # (8/10 a 7/10 proti 9/10). Oba popletli hranici cs/en presne na pasti
+      # "faster": 3b urcil anglicky dotaz jako cesky a slovo zahodil, 8b
+      # naopak prepsal DVA ceske dotazy do anglictiny. 3b navic jednou minul
+      # cistou detekci bez pasti (cs -> en). Pri volnem psani obaluje odpoved
+      # do cislovaneho seznamu i kdyz SYSTEM prompt Krytona chce "plynulou
+      # cestinu" - stylisticky tik, ktery by se projevil az u uzivatele.
       model: openrouter/inclusionai/ling-2.6-flash
       api_key: os.environ/OPENROUTER_API_KEY
       timeout: 60
