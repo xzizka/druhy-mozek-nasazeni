@@ -230,30 +230,52 @@ def api_key() -> str:
 KEY = api_key()
 
 
+# Rozestup mezi voláními a opakování při 429.
+#
+# PRVNÍ POKUS O TOHLE MĚŘENÍ BYL ZKAŽENÝ přesně tímhle: volání šla po sobě
+# bez pauzy, `ling-2.6-flash` po dvaceti kusech vrátil 429 „temporarily rate
+# limited" a v přepisu vyšel 2/10. Nebyla to kvalita, byl to rate limit —
+# a bez opakování by se do výsledků zapsal jako selhání modelu.
+#
+# Měří se kvalita, ne chování pod nárazem, takže je správně 429 přečkat
+# a zopakovat. Latence se počítá jen z ÚSPĚŠNÉHO pokusu, aby ji čekání
+# na rate limit nezkreslilo.
+GAP = 1.5
+RETRY_429 = 4
+
+
 def call(model: str, prompt: str, max_tokens: int) -> tuple[str, float, str]:
     """(content, sekundy, chyba). Prázdný content je chyba, jako v `_call`."""
     body = json.dumps({"model": model,
                        "messages": [{"role": "user", "content": prompt}],
                        "max_tokens": max_tokens, "temperature": 0}).encode()
-    req = urllib.request.Request(API, body, {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {KEY}",
-        "HTTP-Referer": "https://github.com/xzizka/druhy-mozek-nasazeni",
-        "X-Title": "druhy-mozek eval"})
-    t0 = time.time()
-    try:
-        with urllib.request.urlopen(req, timeout=180) as r:
-            d = json.load(r)
-    except urllib.error.HTTPError as e:
-        return "", time.time() - t0, f"HTTP {e.code}: {e.read()[:120].decode(errors='replace')}"
-    except Exception as e:
-        return "", time.time() - t0, f"{type(e).__name__}: {e}"
-    dt = time.time() - t0
-    ch = (d.get("choices") or [{}])[0]
-    out = ((ch.get("message") or {}).get("content") or "").strip()
-    if not out:
-        return "", dt, f"prazdna odpoved (finish_reason={ch.get('finish_reason')})"
-    return out, dt, ""
+    last = ""
+    for attempt in range(RETRY_429 + 1):
+        req = urllib.request.Request(API, body, {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {KEY}",
+            "HTTP-Referer": "https://github.com/xzizka/druhy-mozek-nasazeni",
+            "X-Title": "druhy-mozek eval"})
+        t0 = time.time()
+        try:
+            with urllib.request.urlopen(req, timeout=180) as r:
+                d = json.load(r)
+        except urllib.error.HTTPError as e:
+            last = f"HTTP {e.code}: {e.read()[:120].decode(errors='replace')}"
+            if e.code == 429 and attempt < RETRY_429:
+                time.sleep(5 * (attempt + 1))    # 5, 10, 15, 20 s
+                continue
+            return "", time.time() - t0, last
+        except Exception as e:
+            return "", time.time() - t0, f"{type(e).__name__}: {e}"
+        dt = time.time() - t0
+        ch = (d.get("choices") or [{}])[0]
+        out = ((ch.get("message") or {}).get("content") or "").strip()
+        time.sleep(GAP)
+        if not out:
+            return "", dt, f"prazdna odpoved (finish_reason={ch.get('finish_reason')})"
+        return out, dt, ""
+    return "", 0.0, last
 
 
 results = {}
