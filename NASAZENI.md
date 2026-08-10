@@ -429,10 +429,21 @@ Korpus: **975 dokumentů / 114 183 chunků** z reálných knih (Gutenberg) a če
 Wikipedie, cs 400 / en 301 / de 177 / la 101, každý dokument přes 100 chunků.
 Uloženo v `/srv/brain/markdown/_scale/`, gitignorováno.
 
-Celý report kdykoliv: `scripts/11-scale-report.sh`. Úklid
-`scripts/12-scale-cleanup.sh` — smaže korpus, přeindexuje a přestaví HNSW nad
-zbytkem; ptá se na potvrzení. Surové stažené texty v `/root/corpus/raw` (142 MB)
-záměrně nechává, jsou znovupoužitelné, a mažou se ručně.
+**Korpus byl 2026-08-10 uklizen** (`scripts/12-scale-cleanup.sh`): reindex smazal
+975 dokumentů za 10,7 s bez chyby, HNSW přestavěn, v indexu zbyly 4 testovací
+poznámky. Databáze 1186 → 246 MB, markdown strom 110 MB → 556 kB. Report zůstal
+v `/root/corpus/state/report.txt` a čísla výš.
+
+Z těch 246 MB je ale asi **218 MB mrtvé místo v GIN indexech** — `chunk_trgm_gin`
+155 MB a `chunk_tsv_gin` 63 MB pro čtyři chunky. Skript přestavuje jen HNSW,
+na zbytek pouští `VACUUM ANALYZE`, a ten místo označí za znovupoužitelné, ale
+systému ho nevrátí; u GIN indexů zvlášť. Není to chyba, místo se znovu využije.
+Kdo chce čistý základ, `REINDEX TABLE retrieval.chunk` ho nad čtyřmi řádky
+vrátí okamžitě.
+
+**Obnova korpusu je levnější, než vypadá:** surové stažené texty zůstaly
+v `/root/corpus/raw` (142 MB), takže `corpus_build.py` je nemusí tahat znovu.
+Zaplatí se ale indexace — při 1,2–1,6 s/chunk zhruba dva dny.
 
 ### Co měření ukázalo
 
