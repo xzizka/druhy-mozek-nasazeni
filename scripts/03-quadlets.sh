@@ -354,6 +354,14 @@ Environment=DEFAULT_LANG=cs
 # ale ~2-3 s na dokument navic - tehdy stoji za zvazeni DETECT_LANG_ENABLED=0.
 Environment=DETECT_LANG_ENABLED=1
 Environment=RESULT_LIMIT=8
+# Context window expansion (app/expand.py): k finalnim vysledkum dotahne
+# sousedni chunky (ordinal +- okno) ze stejneho dokumentu, protoze
+# chunkovani je bez overlapu a hranice chunku je otazka rozpoctu
+# CHUNK_CHARS, ne vyznamu. Aplikuje se AZ po reranku, takze ho nedrazi -
+# jen prodluzuje prompt pro ANSWER_MODEL. Okno 1 pridava nejvys 2 sousedy
+# na hit.
+Environment=EXPAND_ENABLED=1
+Environment=EXPAND_WINDOW=1
 Environment=MARKDOWN_ROOT=/data/markdown
 HealthCmd=curl -fsS http://localhost:8080/healthz
 HealthInterval=30s

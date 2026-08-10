@@ -171,6 +171,43 @@ Index je lemmatizovaný **s diakritikou**, takže `'vektorovych'` není lexém a
 lexikální větev minout **musí**. Tohle je přesně důvod, proč tam ta třetí větev
 je — a proč se `hybrid_search` nesmí zjednodušit na dvě větve.
 
+### Context window expansion — sousední chunky se slučují po hledání
+
+Hledání a rerank hodnotí chunky izolovaně. Chunkování je **bez overlapu**
+(viz `chunker.py`), takže hranice chunku je otázka rozpočtu `CHUNK_CHARS`,
+ne významu — odpověď se na ní umí rozseknout přesně uprostřed myšlenky
+a model dostane jen tu polovinu, která zrovna vyhrála v hledání.
+
+`hybrid_search` teď vrací i `ordinal` (`sql/04-context-expand.sql` — přidání
+sloupce do `RETURNS TABLE` vyžaduje `DROP FUNCTION` + `CREATE`, `CREATE OR
+REPLACE` na to nestačí). `app/expand.py` s ním dotáhne k finálním výsledkům
+sousední chunky ze stejného dokumentu (`ordinal ± EXPAND_WINDOW`, výchozí
+okno 1).
+
+**Aplikuje se AŽ na finální (přerankované, oříznuté na `limit`) výsledky,**
+ne dřív — reranker je na tomto systému změřený na atomických chuncích (viz
+"Rerank" níž), a předřazení expanze by mu poslalo jiný vstup, než na jaký
+byl vybraný. Cena expanze proto padá jen na délku promptu pro
+`ANSWER_MODEL`, ne na rerank.
+
+**Okna, která se dotýkají nebo překrývají, se SLUČUJÍ do jednoho souvislého
+bloku** — dva hity ze dvou sousedních odstavců jedné pasáže se tím nerozpadnou
+zpátky na dva zdroje s duplicitním textem. Počet vrácených `results` proto
+může klesnout pod `limit`; je to záměr, promítá skutečnou strukturu poznámek.
+
+Merged výsledek nese metadata (skóre, `chunk_id`, `trust_level`) od
+**anchoru** — nejlépe skórujícího hitu ve skupině — a jen `content`/
+`heading_path` nahrazuje sloučenou verzí. Citace v Krytonovi tedy dál míří
+na chunk, který o dotazu skutečně rozhodl; `content` kolem něj nese víc.
+
+Vypnout jde per request (`"expand": false`) nebo globálně `EXPAND_ENABLED=0`.
+Ověřeno živě proti reálnému indexu, ne jen jednotkově nad čistou funkcí:
+`scripts/18-context-expand-check.sh` zapíše dokument s pěti nadpisy (=
+pěti chunky), zeptá se na prostřední a ověří, že odpověď obsahuje oba
+sousedy, ale ne chunky za nimi — a že `expand:false` sousedy nepřidá.
+Stejná třída chyby jako u `analytics.py` (`SET LOCAL` prošlo smoke testem,
+spadlo na živém Postgresu) by se stubovanou DB nikdy neprojevila.
+
 ## Rerank — regulátor latence
 
 `RERANK_TOP_K` je přímý regulátor latence dotazu. Změřeno s nasazeným

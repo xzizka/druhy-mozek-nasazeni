@@ -71,3 +71,16 @@ REWRITE_TIMEOUT = float(os.environ.get("REWRITE_TIMEOUT", "12"))
 DETECT_LANG_ENABLED = os.environ.get("DETECT_LANG_ENABLED", "1") not in ("0", "false", "no")
 # Na určení jazyka stačí pár vět; posílat celý dokument je plýtvání tokeny.
 DETECT_LANG_CHARS = int(os.environ.get("DETECT_LANG_CHARS", "1200"))
+
+# Context window expansion (app/expand.py). K finálním výsledkům hledání
+# dotáhne sousední chunky (ordinal ± EXPAND_WINDOW ze stejného dokumentu),
+# protože chunkování je bez overlapu a hranice chunku je otázka rozpočtu
+# CHUNK_CHARS, ne významu — odpověď se na ní umí rozseknout uprostřed
+# myšlenky. Aplikuje se AŽ na finální (přerankované, oříznuté) výsledky,
+# takže rerank dál hodnotí atomické chunky, na které je změřený.
+#
+# Výchozí okno 1 je konzervativní start: přidá nejvýš 2 sousední chunky
+# na hit (~2× CHUNK_CHARS navíc), což zvedá jen délku promptu pro
+# ANSWER_MODEL, ne cenu reranku (ten uz probehl na kratsim textu).
+EXPAND_ENABLED = os.environ.get("EXPAND_ENABLED", "1") not in ("0", "false", "no")
+EXPAND_WINDOW = int(os.environ.get("EXPAND_WINDOW", "1"))

@@ -10,7 +10,7 @@ import threading
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from . import config, db, indexer, rewrite
+from . import config, db, expand as expandmod, indexer, rewrite
 from . import lang as langs
 from .infinity import Infinity, InfinityError
 
@@ -56,6 +56,12 @@ class SearchRequest(BaseModel):
     # `cheap` ve stejném volání jako klíčová slova; když ani to ne, platí
     # DEFAULT_LANG. Dense a fuzzy větev jazyk neřeší a jedou napříč vždy.
     lang: str | None = None
+    # None = podle EXPAND_ENABLED. Dotáhne k finálním výsledkům sousední
+    # chunky ze stejného dokumentu (viz app/expand.py) — okna, která se
+    # dotýkají nebo překrývají, se SLUČUJÍ do jednoho bloku, takže počet
+    # vrácených `results` může klesnout pod `limit`. To je záměr.
+    expand: bool | None = None
+    expand_window: int | None = None
 
 
 @app.get("/healthz")
@@ -137,11 +143,19 @@ def search(req: SearchRequest):
             # že reranking proběhl.
             log.warning("rerank selhal, vracim RRF poradi: %s", e)
 
+    final_hits = hits[:limit]
+
+    do_expand = config.EXPAND_ENABLED if req.expand is None else req.expand
+    window = config.EXPAND_WINDOW if req.expand_window is None else req.expand_window
+    if do_expand and window > 0 and final_hits:
+        final_hits = expandmod.expand(final_hits, window, db.fetch_chunk_range)
+
     return {"query": req.query, "keywords_used": terms,
             "keywords_source": terms_source, "lang": resolved,
             "lang_source": lang_source, "ts_config": langs.ts_config(resolved),
             "reranked": reranked, "candidates": candidates,
-            "results": hits[:limit]}
+            "expanded": do_expand and window > 0,
+            "results": final_hits}
 
 
 @app.post("/reindex")

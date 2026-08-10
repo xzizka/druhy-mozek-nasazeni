@@ -229,7 +229,7 @@ def hybrid_search(embedding_literal: str, query_terms: str, limit: int,
     with pool().connection() as conn:
         rows = conn.execute(
             "SELECT chunk_id, document_id, source_path, heading_path, content, "
-            "       trust_level, score, r_dense, r_lexical, r_fuzzy "
+            "       ordinal, trust_level, score, r_dense, r_lexical, r_fuzzy "
             "FROM retrieval.hybrid_search("
             "  p_embedding => %s::halfvec, p_query => %s, p_limit => %s, "
             # p_max_trust je smallint; int4 -> smallint neni implicitni cast,
@@ -240,6 +240,23 @@ def hybrid_search(embedding_literal: str, query_terms: str, limit: int,
             (embedding_literal, query_terms, limit, candidates, max_trust,
              ts_config)).fetchall()
     return [{"chunk_id": r[0], "document_id": str(r[1]), "source_path": r[2],
-             "heading_path": r[3], "content": r[4], "trust_level": r[5],
-             "rrf_score": float(r[6]) if r[6] is not None else None,
-             "r_dense": r[7], "r_lexical": r[8], "r_fuzzy": r[9]} for r in rows]
+             "heading_path": r[3], "content": r[4], "ordinal": r[5],
+             "trust_level": r[6],
+             "rrf_score": float(r[7]) if r[7] is not None else None,
+             "r_dense": r[8], "r_lexical": r[9], "r_fuzzy": r[10]} for r in rows]
+
+
+def fetch_chunk_range(document_id: str, lo: int, hi: int) -> list[dict]:
+    """Chunky dokumentu s `ordinal` v [lo, hi], seřazené. Pro context window
+    expansion (viz expand.py) — dotahuje sousedy vítězného chunku.
+
+    `document_id` přichází jako str (viz hybrid_search výš, string kvůli
+    JSON serializaci), proto explicitní ::uuid — stejná konvence jako
+    ::smallint a ::regconfig u hybrid_search.
+    """
+    with pool().connection() as conn:
+        rows = conn.execute(
+            "SELECT ordinal, content, heading_path FROM retrieval.chunk "
+            "WHERE document_id = %s::uuid AND ordinal BETWEEN %s AND %s "
+            "ORDER BY ordinal", (document_id, lo, hi)).fetchall()
+    return [{"ordinal": r[0], "content": r[1], "heading_path": r[2]} for r in rows]
