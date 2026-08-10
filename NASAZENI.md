@@ -19,11 +19,11 @@ interní most za opnsense bez fyzického portu a WAN→LAN se neroutuje.
 
 | služba | stav | port | paměť |
 |---|---|---|---|
-| PostgreSQL 17 + pgvector 0.8.6 + hunspell cs | **healthy**, startuje při bootu | 5432 | 0,15 GB (prázdná DB) |
+| PostgreSQL 17 + pgvector 0.8.6 + hunspell cs | **healthy**, startuje při bootu | 5432 | 0,15 GB (měřeno nad prázdnou DB 2026-08-06) |
 | LiteLLM | **healthy**, startuje při bootu | 4000 | 1,26 GB |
 | Infinity (bge-m3 + bge-reranker-**v2-m3**) | **healthy**, startuje při bootu | 7997 | 4,39 GB RSS |
 | Retrieval Service (Python) | **healthy**, startuje při bootu | 8080 (interní) | ~90 MB |
-| Kryton | zdrojáky, obraz i secrety hotové; unit zatím nespuštěn | 3001 | (limit 800M) |
+| Kryton | **healthy**, startuje při bootu — běží od 2026-08-09 | 3001 | 85 MB (limit 800M) |
 
 Kontejner: 6 jader, **18432 MB RAM** (navýšeno z 13312 MB), swap 2048 MB,
 rootfs 64 GB, unprivileged, `nesting=1`, `onboot=1`.
@@ -415,53 +415,113 @@ a `Containerfile.postgres` jsou **beze změny** — fungovaly na první pokus.
   byla jediný kanál pro první krok. Použit jen na instalaci Tailscale.
 - `scripts/ct-bootstrap.sh` — to, co se přes konzoli poslalo.
 
-## PRÁVĚ BĚŽÍ: zátěžový test (od 2026-08-07 13:15 UTC)
+## Zátěžový test — DOKONČEN 2026-08-09T05:11:10Z
 
-Systemd jednotka `scale-test` na brainu. Konec indexace čekán **2026-08-09
-kolem 03:45 UTC**, s HNSW a měřením kolem 05:00.
+Běžel od 2026-08-07 13:15 UTC jako jednotka `scale-test`. Indexace hotová
+05:07:05, HNSW 05:07:35, měření 05:11:10 — necelé dva dny.
 
-| | |
-|---|---|
-| korpus | **975 dokumentů / ~113 764 chunků**, každý dokument přes 100 chunků |
-| jazyky | cs 399, en 300, de 176, la 100 |
-| zdroj | reálné knihy z Gutenbergu + česká Wikipedie |
-| tempo | **1,22 s/chunk** (shodné s validačním měřením) |
-| umístění | `/srv/brain/markdown/_scale/`, gitignorováno i vyjmuto z indexu |
-
-Stav a výsledek kdykoliv: `scripts/11-scale-report.sh`. Běh je resumovatelný,
-po pádu stačí spustit `10-scale-test.sh` znovu. Úklid `12-scale-cleanup.sh`.
-
-**Proč to běží:** dosavadní ověření vícejazyčnosti stálo na 4, později 8
+**Proč vznikl:** dosavadní ověření vícejazyčnosti stálo na 4, později 8
 dokumentech. To stačilo na tvrzení o mechanismech (zapisuje se `lang`, recykluje
 se podle obsahu), ale na nic o kvalitě — při čtyřech dokumentech vrací dense
 větev vždycky všechny, takže „funguje napříč jazyky" bylo pravda triviálně.
 
-**Dvě čísla, na která se v reportu dívat:** přesnost detekce jazyka na ~97
-dokumentech bez frontmatteru (ground truth je v názvu souboru, takže je to
-skutečné měření, ne kruh) a per-jazyk top-1 s MRR proti known-good dokumentu.
+Korpus: **975 dokumentů / 114 183 chunků** z reálných knih (Gutenberg) a české
+Wikipedie, cs 400 / en 301 / de 177 / la 101, každý dokument přes 100 chunků.
+Uloženo v `/srv/brain/markdown/_scale/`, gitignorováno.
 
-**Dva kroky čekají na doběhnutí:** `git -C /root/deploy pull` (nesmí se dělat za
-běhu — bash čte běžící skript z disku průběžně) a `rm -rf /root/deploy.old`.
+Celý report kdykoliv: `scripts/11-scale-report.sh`. Úklid
+`scripts/12-scale-cleanup.sh` — smaže korpus, přeindexuje a přestaví HNSW nad
+zbytkem; ptá se na potvrzení. Surové stažené texty v `/root/corpus/raw` (142 MB)
+záměrně nechává, jsou znovupoužitelné, a mažou se ručně.
 
-Co příprava testu odhalila, je zapsané jinde: cena reranku nad reálnými chunky
-v `PIPELINE.md`, práva na `/srv/brain/markdown` a izolace smoke testu jako
-body 6 a 7 výš.
+### Co měření ukázalo
+
+**Rozsah zvládnutý bez chyby.** 0 chunků bez embeddingu, 0 nedokončených
+dokumentů. DB 1170 MB, z toho `chunk_embedding_hnsw` 295 MB, `chunk_trgm_gin`
+154 MB, `chunk_tsv_gin` 63 MB. **Stavba HNSW nad 114 tisíci chunky trvala 27 s.**
+
+**Přesnost s known-good dokumentem** (10 dotazů na jazyk, dotazy z korpusu):
+
+| jazyk | top-1 | MRR |
+|---|---|---|
+| cs | 9/10 (90 %) | 0,900 |
+| en | 7/10 (70 %) | 0,850 |
+| de | 10/10 (100 %) | 1,000 |
+| la | 10/10 (100 %) | 1,000 |
+
+Lexikální a fuzzy větev trefily správný dokument skoro vždy (9–10 z 10), dense
+větev slabší (6–9). Nad velkým korpusem tedy nese kvalitu především lexikální
+větev, ne vektorová — přesně opačně, než by se u „vektorového vyhledávání"
+čekalo.
+
+**Detekce jazyka: 91/96 = 94,8 % „hrubě", ale skutečná přesnost je 100 %.**
+Rozdíl je potřeba umět přečíst. Všech pět chyb (`en-0230/0240/0250/0260`,
+`la-0010`) jsou dokumenty, u kterých volání na `cheap` **vůbec neproběhlo** —
+propadly na `DEFAULT_LANG=cs`. V logu je 14 takových selhání (13× 429 z vyčerpané
+denní kvóty, 1× timeout); zbylých 9 se trefilo náhodou, protože šlo o české
+dokumenty. Skutečně provedených detekcí sedělo **79/79**, dokumentů
+s frontmatterem **860/860**.
+
+Poučení má dvě části. Za prvé, **statistika „detekce trefila jazyk" je u českého
+fallbacku systematicky nadhodnocená** a rozlišit to jde jen kombinací logu a DB —
+z reportu samotného ne. Za druhé, **fallback nespouští jen kvóta**: ten jeden
+timeout vyrobil úplně stejnou tichou chybu jako 429, takže grepovat jen `429`
+nestačí:
+
+    journalctl -u retrieval | grep "detekce jazyka pres cheap selhala"
+
+Kvótu jako příčinu odstranil přechod aliasu `cheap` na placený model
+(viz `PIPELINE.md`), tichost selhání ne.
+
+**Náprava jazyka doběhla automaticky** (jednotka `scale-fix-lang`, 05:15:19)
+a opravila přesně těch 5 dokumentů — za cenu **1 embeddingu a 100 recyklovaných
+chunků**. Záměrně až po měření, aby report popisoval běh takový, jaký byl.
+
+**Recyklace chunků podle obsahu ověřena na stochunkovém dokumentu**, a je to
+nejlepší zpráva celého testu:
+
+| zásah | embeddingů | recyklováno |
+|---|---|---|
+| změna odstavce uprostřed | 1 | 100 |
+| vložení odstavce na začátek (posun ordinálů) | 1 | 101 |
+| změna jen `lang: cs → en` | **0** | 102 |
+
+Reindex celého korpusu při jednom zásahu trval 1,6–3,4 s. Posun ordinálů
+nestojí nic navíc, protože se klíčuje podle obsahu, a změna jazyka nestojí
+ani jeden embedding.
+
+**Tempo indexace 1,04–1,62 s/chunk**, průměr po restartu ~1,21 s (návrhový
+odhad byl 1,22 s). Kolísá po půlhodinách; ETA počítej z 1,2–1,6, ne z 1,04.
+
+**Cena reranku nad plným indexem je řádově jinde než nad krátkými poznámkami** —
+bez reranku 2,30 s, `top_k=5` 11,49 s, `10` 13,24 s, `20` 26,15 s, `40` 47,23 s.
+Rozbor v `PIPELINE.md`; důsledek pro nastavení je bod 2 níž.
+
+Práva na `/srv/brain/markdown` a izolace smoke testu, které příprava testu
+odhalila, jsou body 6 a 7 výš.
 
 ## Doporučené další kroky
 
-1. ~~Napsat Krytona~~ — **napsaný a otestovaný, zbývá ho poprvé spustit.**
-   Kód v `kryton/`, smoke test `scripts/13-smoke-kryton.py` (34 kontrol).
-   Kontrakt retrievalu upraven pro Python: místo PDO DSN
-   (`pgsql:host=…;dbname=…`, což je PHP) je teď jeden secret
-   `retrieval_database_url` s libpq URL, stejně jako u litellm a kryton.
+1. ~~Napsat Krytona~~ — **běží od 2026-08-09**, port 3001, unit `kryton.service`,
+   startuje i po rebootu. Kód v `kryton/`, smoke test
+   `scripts/13-smoke-kryton.py` (34 kontrol). Kontrakt retrievalu upraven pro
+   Python: místo PDO DSN (`pgsql:host=…;dbname=…`, což je PHP) je teď jeden
+   secret `retrieval_database_url` s libpq URL, stejně jako u litellm a kryton.
 
-   Postup prvního spuštění (obraz je z 2026-08-06, tedy **před** opravou
-   escapování — musí se přestavět):
+   **Poučení z prvního spuštění stojí za zapamatování: Kryton byl celý napsaný,
+   postavený do obrazu, se secrety, DB i quadletem — a přitom ani jednou
+   nespuštěný.** První běh hned ukázal, že `page()` prohnala už vyrenderované
+   tělo stránky druhým průchodem šablony s `autoescape=True`, takže se **každá**
+   stránka zobrazovala jako vlastní zdroják. Opraveno přes `markupsafe.Markup`.
+   Nasazený a spustitelný neznamená ověřený — u čehokoliv dalšího, co je
+   „hotové, jen to ještě neběželo", počítej s tím, že to neběželo.
+
+   Přestavba obrazu po změně zdrojáků:
 
        git -C /root/deploy pull
        podman build --network=host -t localhost/kryton:latest \
            -f /root/deploy/kryton/Containerfile /root/deploy/kryton
-       systemctl start kryton && systemctl status kryton
+       systemctl restart kryton && systemctl status kryton
 
    **Vícejazyčnost:** `POST /search` bere volitelné `lang` (`cs|en|de|la`).
    Kryton ho **záměrně neposílá** — rozhodnuto 2026-08-09 nechat detekci na
@@ -473,12 +533,24 @@ body 6 a 7 výš.
    `core.capture()` frontmatter `lang:`; odpověď pak nese `lang_source:
    "request"`. Neznámý kód vrací 422.
 2. ~~Zvážit výměnu rerankeru za `bge-reranker-v2-m3`~~ — hotovo a změřeno,
-   top-1 přesnost 57 % → 100 %. Zbývá rozhodnout `RERANK_TOP_K`: 20 znamená
-   3,8 s na dotaz, 10 asi 2,0 s.
+   top-1 přesnost 57 % → 100 %. **`RERANK_TOP_K` zůstává nerozhodnutý a po
+   zátěžovém testu je to naléhavější, ne méně.** Čísla, se kterými se
+   rozhodovalo dřív (20 → 3,8 s, 10 → 2,0 s), platila nad krátkými testovacími
+   poznámkami. Nad plným indexem stojí dnešní nastavení `RERANK_TOP_K=20`
+   **26,15 s na dotaz**, `10` je 13,24 s a bez reranku 2,30 s — cena se totiž
+   řídí objemem textu, ne počtem kandidátů, a reálné chunky jsou mnohem delší.
+   Interaktivně je 26 s nepoužitelné.
+
+   Rozhodnout se ale nedá bez čísla, které zatím nikdo nezměřil: **kolik
+   reranking nad RRF fúzí vlastně přidává kvality.** `scripts/06-eval-reranker.py`
+   na to je, ale měřil taky jen krátké dokumenty. Než se sníží `top_k`, stojí
+   za to ho pustit nad reálným korpusem — rozdíl mezi 2,3 s a 26 s je tak velký,
+   že si zaslouží měření, ne odhad.
 3. ~~Dodat skutečné OpenRouter a bigpickle klíče~~ — hotovo, ověřeno.
 4. ~~Vícejazyčnost (cs, en, de, la)~~ — hotovo a ověřené na čtyřech poznámkách,
    viz `PIPELINE.md` a `scripts/09-multilang-test.py`.
-5. Zneplatnit použitý Tailscale auth key.
+5. ~~Zneplatnit použitý Tailscale auth key~~ — **hotovo**, klíč měl platnost
+   jeden den a vypršel sám.
 6. `/dev/net/tun` — vědomě odloženo. Propustnost Tailscale je i v userspace módu
    57–64 MB/s při 2 ms, takže to není problém; jediný dopad je, že
    `podman build` potřebuje `--network=host`.
