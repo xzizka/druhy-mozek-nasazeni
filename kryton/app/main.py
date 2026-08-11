@@ -324,8 +324,8 @@ def capture(text: str = Form(""), title: str = Form(""),
 NAHRAT = """<h1>Nahrát dokument</h1>
 <p class="meta">Text se zaindexuje jako <b>importovaný</b> dokument
 (nižší důvěra než vlastní poznámky), originál se uloží na S3.
-Podporované formáty: markdown a prostý text. PDF a Word přijdou v další
-etapě. Strop {{ max_mb }} MB.</p>
+Podporované formáty: markdown, prostý text, PDF a Word (.docx). Strop
+{{ max_mb }} MB, u PDF navíc {{ max_pages }} stránek.</p>
 {% if not s3 %}<p class="err">Úložiště S3 není nakonfigurované — nahrávání
 je vypnuté.</p>{% endif %}
 {% if err %}<p class="err">{{ err }}</p>{% endif %}
@@ -333,7 +333,7 @@ je vypnuté.</p>{% endif %}
 <code>{{ ok.source_path }}</code> — {{ ok.size }} B, kódování
 <b>{{ ok.encoding }}</b>, originál na S3 jako <code>{{ ok.s3_key }}</code>.</p>{% endif %}
 <form method="post" action="/nahrat" enctype="multipart/form-data">
-<p><input type="file" name="soubor" required></p>
+<p><input type="file" name="soubor" accept=".md,.markdown,.txt,.text,.pdf,.docx" required></p>
 <button>Nahrát</button></form>
 {% if items %}<h2>Nahrané dokumenty</h2>
 <table><tr><th>soubor</th><th class="n">velikost</th><th>kódování</th><th>uloženo</th><th></th></tr>
@@ -350,7 +350,8 @@ je vypnuté.</p>{% endif %}
 def _stranka_nahrat(err=None, ok=None):
     return page("Nahrát", render(
         NAHRAT, err=err, ok=ok, s3=storage.enabled(),
-        max_mb=int(config.UPLOAD_MAX_BYTES / 1e6), items=db.uploads(50)))
+        max_mb=int(config.UPLOAD_MAX_BYTES / 1e6),
+        max_pages=config.UPLOAD_MAX_PAGES, items=db.uploads(50)))
 
 
 @app.get("/nahrat", response_class=HTMLResponse)

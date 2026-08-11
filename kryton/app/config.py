@@ -71,7 +71,7 @@ ANALYTICS_SQL_TIMEOUT_MS = int(os.environ.get("ANALYTICS_SQL_TIMEOUT_MS", "10000
 ANALYTICS_MAX_ROWS = int(os.environ.get("ANALYTICS_MAX_ROWS", "200"))
 
 # ---------------------------------------------------------------------------
-# Nahrávání dokumentů (P2, etapa 1: md a txt)
+# Nahrávání dokumentů (P2, etapa 1: md a txt; etapa 2: PDF; etapa 3: DOCX)
 # ---------------------------------------------------------------------------
 # Podadresář pod MARKDOWN_ROOT pro text vytažený z nahraných souborů.
 # Patří do `.gitignore` repozitáře poznámek — stejný vzorec jako `_scale/`,
@@ -79,6 +79,11 @@ ANALYTICS_MAX_ROWS = int(os.environ.get("ANALYTICS_MAX_ROWS", "200"))
 # `_scan()` prochází `root.rglob("*.md")` relativně ke kořeni.
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "_uploads")
 UPLOAD_MAX_BYTES = int(os.environ.get("UPLOAD_MAX_BYTES", str(50 * 1024 * 1024)))
+
+# Strop na počet stránek PDF — ochrana proti skenům s desetitisíci stránkami.
+# DOCX nemá v XML pojem "stránka" bez plného vyrenderování, jeho ochrana proti
+# zip bombě je proto samostatná (_DOCX_MAX_UNCOMPRESSED v ingest.py).
+UPLOAD_MAX_PAGES = int(os.environ.get("UPLOAD_MAX_PAGES", "500"))
 
 # 0 = vlastní poznámka, 1 = importované, 2 = automatický sync z venku
 # (komentář u retrieval.document). Filtr je `trust_level <= p_max_trust`,

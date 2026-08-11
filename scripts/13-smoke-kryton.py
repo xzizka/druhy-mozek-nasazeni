@@ -498,13 +498,12 @@ _t, _e = ingest.dekoduj("Příliš žluťoučký".encode("cp1250"))
 check("český cp1250 se dekóduje správně", (_t, _e) == ("Příliš žluťoučký", "cp1250"),
       "%r %s" % (_t, _e))
 
-for pripona, slovo in ((".pdf", "PDF"), (".docx", "Word")):
-    try:
-        ingest.extrahuj(b"data", "soubor" + pripona)
-        check("chystaný formát %s odmítne" % pripona, False, "prošel")
-    except ingest.IngestError as ex:
-        check("chystaný formát %s odmítne srozumitelně" % pripona,
-              slovo in str(ex) and "zatím" in str(ex), str(ex))
+try:
+    ingest.extrahuj(b"data", "soubor.doc")
+    check(".doc (mimo rozsah) odmítne", False, "prošel")
+except ingest.IngestError as ex:
+    check(".doc (mimo rozsah) odmítne srozumitelně",
+          "docx" in str(ex).lower(), str(ex))
 for pripona in (".exe", ".jpg", ""):
     try:
         ingest.extrahuj(b"data", "soubor" + pripona)
@@ -516,6 +515,138 @@ try:
     check("soubor bez textu odmítnut", False, "prošel")
 except ingest.IngestError:
     check("soubor bez textu odmítnut", True)
+
+print("== P2 etapa 2: PDF ==")
+
+
+def _minimalni_pdf(texty):
+    """Syntakticky platné PDF s jednou stránkou na text, bez závislostí —
+    offsety v xref se počítají, ne odhadují, aby to pypdf přečetl napoprvé."""
+    n = len(texty)
+    objs = {}
+    objs[1] = b"<</Type/Catalog/Pages 2 0 R>>"
+    kids = " ".join("%d 0 R" % (3 + i) for i in range(n))
+    objs[2] = ("<</Type/Pages/Kids[%s]/Count %d>>" % (kids, n)).encode()
+    font_num = 3 + 2 * n
+    for i, text in enumerate(texty):
+        page_num, content_num = 3 + i, 3 + n + i
+        content = (("BT /F1 24 Tf 72 700 Td (%s) Tj ET" % text) if text else "").encode("ascii")
+        objs[page_num] = (
+            "<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]"
+            "/Resources<</Font<</F1 %d 0 R>>>>/Contents %d 0 R>>"
+            % (font_num, content_num)).encode()
+        objs[content_num] = (("<</Length %d>>\nstream\n" % len(content)).encode()
+                             + content + b"\nendstream")
+    objs[font_num] = b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>"
+
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = {}
+    for num in sorted(objs):
+        offsets[num] = len(out)
+        out += ("%d 0 obj" % num).encode() + objs[num] + b"endobj\n"
+    xref_offset = len(out)
+    maxnum = max(objs)
+    out += ("xref\n0 %d\n" % (maxnum + 1)).encode()
+    out += b"0000000000 65535 f \n"
+    for num in range(1, maxnum + 1):
+        out += ("%010d 00000 n \n" % offsets[num]).encode()
+    out += ("trailer<</Size %d/Root 1 0 R>>\nstartxref\n%d\n%%%%EOF"
+            % (maxnum + 1, xref_offset)).encode()
+    return bytes(out)
+
+
+PDF_OK = _minimalni_pdf(["Ahoj svete", "Druha stranka"])
+text_pdf, enc_pdf = ingest.extrahuj(PDF_OK, "zprava.pdf")
+check("PDF: obě stránky se vytáhly",
+      "Ahoj svete" in text_pdf and "Druha stranka" in text_pdf, text_pdf)
+check("PDF: rozpozná se jako 'pdf'", enc_pdf == "pdf", enc_pdf)
+
+try:
+    ingest.extrahuj(_minimalni_pdf(["", "", ""]), "sken.pdf")
+    check("PDF bez textové vrstvy (sken) odmítnut", False, "prošel")
+except ingest.IngestError as ex:
+    check("PDF bez textové vrstvy (sken) odmítnut srozumitelně",
+          "sken" in str(ex).lower(), str(ex))
+
+_puv_max_stran = ingest.config.UPLOAD_MAX_PAGES
+ingest.config.UPLOAD_MAX_PAGES = 2
+try:
+    ingest.extrahuj(_minimalni_pdf(["a", "b", "c"]), "moc-stranek.pdf")
+    check("strop počtu stránek se vynutí", False, "prošel")
+except ingest.IngestError as ex:
+    check("strop počtu stránek se vynutí", "stránek" in str(ex), str(ex))
+ingest.config.UPLOAD_MAX_PAGES = _puv_max_stran
+
+print("== P2 etapa 3: DOCX ==")
+import io as _io
+import zipfile as _zipfile
+
+
+def _minimalni_docx(odstavce):
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    body = "".join("<w:p><w:r><w:t>%s</w:t></w:r></w:p>" % o for o in odstavce)
+    xml = ('<?xml version="1.0" encoding="UTF-8"?>'
+           '<w:document xmlns:w="%s"><w:body>%s</w:body></w:document>' % (ns, body))
+    buf = _io.BytesIO()
+    with _zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("word/document.xml", xml)
+    return buf.getvalue()
+
+
+DOCX_OK = _minimalni_docx(["První odstavec.", "Druhý odstavec, s diakritikou."])
+text_docx, enc_docx = ingest.extrahuj(DOCX_OK, "smlouva.docx")
+check("DOCX: oba odstavce se vytáhly",
+      "První odstavec." in text_docx and "Druhý odstavec" in text_docx, text_docx)
+check("DOCX: rozpozná se jako 'docx'", enc_docx == "docx", enc_docx)
+
+try:
+    ingest.extrahuj(b"tohle neni zip", "poskozeny.docx")
+    check("poškozený DOCX (není ZIP) odmítnut", False, "prošel")
+except ingest.IngestError:
+    check("poškozený DOCX (není ZIP) odmítnut", True)
+
+_prazdny_zip = _io.BytesIO()
+with _zipfile.ZipFile(_prazdny_zip, "w") as _zf:
+    _zf.writestr("neco-jineho.txt", "x")
+try:
+    ingest.extrahuj(_prazdny_zip.getvalue(), "bez-obsahu.docx")
+    check("DOCX bez word/document.xml odmítnut", False, "prošel")
+except ingest.IngestError as ex:
+    check("DOCX bez word/document.xml odmítnut srozumitelně",
+          "document.xml" in str(ex), str(ex))
+
+_puv_limit = ingest.__dict__["_DOCX_MAX_UNCOMPRESSED"]
+ingest._DOCX_MAX_UNCOMPRESSED = 1024 * 1024
+_bomba = _minimalni_docx(["A" * (5 * 1024 * 1024)])
+try:
+    ingest.extrahuj(_bomba, "bomba.docx")
+    check("zip bomba v DOCX se odmítne", False, "prošel")
+except ingest.IngestError as ex:
+    check("zip bomba v DOCX se odmítne", "MB" in str(ex), str(ex))
+ingest._DOCX_MAX_UNCOMPRESSED = _puv_limit
+
+print("== P2 etapa 2+3: celý tok nahrání (uloz) pro PDF a DOCX ==")
+# Sdílený stub _uploads/_s3 předpokládají pozdější sekce prázdný před prvním
+# nahráním (viz "P2: celý tok nahrání" níž), proto se stav kolem téhle
+# kontroly zálohuje a vrací, ne jen doplňuje.
+_uploads_zaloha, _s3_zaloha = list(_uploads), dict(_s3)
+_uploads.clear()
+_s3.clear()
+
+res_pdf = ingest.uloz(PDF_OK, "zprava.pdf")
+check("PDF: celý tok (S3 + evidence + trust)",
+      res_pdf["encoding"] == "pdf" and len(_uploads) == 1 and len(_s3) == 1
+      and "trust: 1" in Path(MD, res_pdf["source_path"]).read_text(encoding="utf-8"),
+      res_pdf)
+
+res_docx = ingest.uloz(DOCX_OK, "smlouva.docx")
+check("DOCX: celý tok (S3 + evidence + trust)",
+      res_docx["encoding"] == "docx" and len(_uploads) == 2 and len(_s3) == 2
+      and "trust: 1" in Path(MD, res_docx["source_path"]).read_text(encoding="utf-8"),
+      res_docx)
+
+_uploads.clear(); _uploads.extend(_uploads_zaloha)
+_s3.clear(); _s3.update(_s3_zaloha)
 
 print("== P2: klíč objektu a region ==")
 check("klíč objektu je odvozený z hashe",
@@ -599,10 +730,10 @@ check("POST /nahrat uloží soubor", r.status_code == 200 and "Nahráno jako" in
       str(r.status_code))
 check("stránka hlásí použité kódování", "cp1250" in r.text)
 
-r = c.post("/nahrat", files={"soubor": ("sken.pdf", b"%PDF-1.4 ...",
+r = c.post("/nahrat", files={"soubor": ("neplatny.pdf", b"tohle neni platne PDF",
                                         "application/pdf")})
-check("PDF odmítne srozumitelně a nespadne",
-      r.status_code == 200 and "zatím neumím" in r.text, str(r.status_code))
+check("neplatný PDF obsah odmítne srozumitelně a nespadne",
+      r.status_code == 200 and "Nahrání se nepovedlo" in r.text, str(r.status_code))
 
 fresh3 = TestClient(main.app)
 r = fresh3.post("/nahrat", files={"soubor": ("x.txt", b"data", "text/plain")},

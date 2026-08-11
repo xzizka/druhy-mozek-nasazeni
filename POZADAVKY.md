@@ -104,7 +104,10 @@ databázi. Pouštěj ji, když se sáhne na `analytics.py`.
 ## P2 — Nahrávání dokumentů, text do DB, originály na S3
 
 **Stav: ETAPA 1 HOTOVA (2026-08-09)** — md a txt nasazeno a ověřeno živě.
-Etapy 2–4 (PDF, DOCX, migrace) čekají.
+**Etapy 2 (PDF) a 3 (DOCX) implementovány a smoke-testovány lokálně
+(2026-08-11), zatím NEnasazeno a NEověřeno živě proti běžícímu stacku** —
+viz poučení u [[kryton-nasazen]]: nasazené a spustitelné neznamená ověřené.
+Etapa 4 (migrace mezi S3 profily) čeká.
 
 Rozhodnuto 2026-08-09: text do `_uploads/` pod `MARKDOWN_ROOT` s řádkem
 v `.gitignore`; zálohu vytaženého textu neřešíme, je obnovitelný z originálu;
@@ -263,11 +266,20 @@ Požadavek, ne možnost, takže hned od začátku:
 2. ~~Kam s vytaženým textem?~~ — návrh B, k odsouhlasení.
 3. ~~Kdo dělá extrakci?~~ — Kryton, rezerva paměti stačí.
 4. ~~Mazat originál na S3 při smazání dokumentu?~~ — ne, viz P3.
-5. **Zálohovat vytažený text**, když `_uploads/` bude mimo git?
-6. **Stropy** na velikost souboru a počet stránek?
-7. **`trust_level` nahraných dokumentů** — stejná důvěra jako vlastní
-   poznámky, nebo nižší? Propisuje se do hledání přes `max_trust`.
-8. **Etapy** — jít po etapách 1–4, nebo rovnou všechny formáty naráz?
+5. ~~**Zálohovat vytažený text**, když `_uploads/` bude mimo git?~~ —
+   **Rozhodnuto 2026-08-11: ne**, stejná logika jako u `_scale/` — derivovaná
+   data se do zálohy nedávají, jsou levně obnovitelná reindexem z originálu.
+6. ~~**Stropy** na velikost souboru a počet stránek?~~ — **Rozhodnuto
+   2026-08-11: `UPLOAD_MAX_BYTES` 50 MB (beze změny z etapy 1),
+   `UPLOAD_MAX_PAGES` 500 stránek u PDF.** DOCX nemá v XML pojem „stránka"
+   bez plného vyrenderování, tam řeší zip bombu samostatný pevný strop na
+   rozbalenou velikost (200 MB), kontrolovaný průběžně při čtení, ne podle
+   (podvržitelných) metadat centrální adresáře zipu.
+7. ~~**`trust_level` nahraných dokumentů**~~ — **Rozhodnuto 2026-08-11:
+   `trust:1`, stejně jako etapa 1** (konzistentní „importované" napříč
+   formáty).
+8. **Etapy** — jde se 2+3 najednou (PDF i DOCX ve stejném kroku), etapa 4
+   (migrace) čeká zvlášť, až bude co migrovat.
 
 ---
 
