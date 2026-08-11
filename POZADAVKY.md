@@ -103,11 +103,9 @@ databázi. Pouštěj ji, když se sáhne na `analytics.py`.
 
 ## P2 — Nahrávání dokumentů, text do DB, originály na S3
 
-**Stav: ETAPA 1 HOTOVA (2026-08-09)** — md a txt nasazeno a ověřeno živě.
-**Etapy 2 (PDF) a 3 (DOCX) implementovány a smoke-testovány lokálně
-(2026-08-11), zatím NEnasazeno a NEověřeno živě proti běžícímu stacku** —
-viz poučení u [[kryton-nasazen]]: nasazené a spustitelné neznamená ověřené.
-Etapa 4 (migrace mezi S3 profily) čeká.
+**Stav: ETAPY 1–3 HOTOVY (etapa 1: 2026-08-09, etapy 2+3: 2026-08-11)** —
+md, txt, PDF i DOCX nasazeno a ověřeno živě. Etapa 4 (migrace mezi S3
+profily) čeká.
 
 Rozhodnuto 2026-08-09: text do `_uploads/` pod `MARKDOWN_ROOT` s řádkem
 v `.gitignore`; zálohu vytaženého textu neřešíme, je obnovitelný z originálu;
@@ -126,11 +124,38 @@ při čtení kódu:
    v indexeru) a `upsert_document` ho nově aktualizuje i při konfliktu —
    jinak by změna nikdy neprošla.
 
-Ověřeno živě: soubor v cp1250 s diakritikou → kódování rozpoznáno,
+Ověřeno živě (etapa 1): soubor v cp1250 s diakritikou → kódování rozpoznáno,
 `_uploads/zkouska-nahravani-<hash>.md` s `trust: 1`, originál na S3 pod
 `originals/<sha256>.txt`, jazyk detekován `cs`, vyhledávání dokument našlo
 první (rerank 0,852) a **`max_trust=0` ho správně vyřadilo**. `git check-ignore`
 potvrdil, že soubor do repozitáře poznámek nejde. Po testu uklizeno.
+
+**Ověřeno živě (etapy 2+3, 2026-08-11)**, proti skutečnému Postgresu, S3
+a retrieval pipeline (voláno přímo přes `app.ingest.uloz()` v běžícím
+kontejneru, ne přes web — přihlašovací heslo do Krytona nebylo potřeba znát
+ani nikam posílat). PDF o dvou stránkách i DOCX o dvou odstavcích:
+- extrakce vytáhla text správně (obě stránky PDF, oba odstavce DOCX
+  s diakritikou), `trust: 1` ve frontmatteru u obou;
+- originály na S3 pod `originals/<sha256>.pdf` a `.docx`;
+- reindex zaindexoval oba jako `retrieval.document` s `trust_level=1`,
+  jazyk `cs`;
+- **druhé `POST /reindex` spuštěné 2 s po prvním dostalo `409 Conflict`**
+  (reindex nedovolí souběh) — DOCX se zaindexoval, až se reindex spustil
+  znovu. Při dvou uploadech rychle po sobě tedy druhý soubor počká na další
+  reindex, ne na ten vyvolaný vlastním uploadem. Stejné riziko platí
+  i pro etapu 1 (md/txt), není to nové u PDF/DOCX — jen se to poprvé
+  projevilo, protože živý test nahrával dva soubory těsně za sebou;
+- vyhledávání „Zivy test DOCX odstavec" vrátilo DOCX dokument první
+  (rerank 0,874), PDF druhý (rerank 0,354), oba se správným `trust_level`;
+- úklid: smazán řádek v `upload`, soubor z `_uploads/`, reindex spuštěn —
+  `retrieval.document` i `upload` čisté, počet dokumentů zpět na 5.
+  **S3 originály záměrně nesmazány** (politika z P3: nikdy neodstraňovat).
+
+Nasazeno: `git push` (přes `ssh.github.com:443` — port 22 na GitHub je
+z pracovní stanice blokovaný, funguje ale GitHubův obchvat přes port 443
+se stejným klíčem), `git pull` na brainu, `podman build --network=host`,
+`systemctl restart kryton`. `pypdf==5.9.0` přibyl do `requirements.txt`,
+žádná nová závislost pro DOCX (jen stdlib `zipfile`/`xml.etree`).
 
 Zadání, jak bylo formulováno:
 
