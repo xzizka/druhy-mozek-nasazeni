@@ -290,6 +290,8 @@ r = c.get(f"/konverzace/{CID}")
 ok = r.status_code == 200 and "Odpověď s citací" in r.text and "test.md" in r.text
 check("konverzace ukáže odpověď i citace", ok, str(r.status_code))
 check("rerank skóre se vyrenderuje", "0.987" in r.text or "0,987" in r.text)
+check("stránka konverzace scroluje na poslední příspěvek",
+      "scrollTo(0,document.body.scrollHeight)" in r.text)
 
 print("== doplňující dotaz ==")
 r = c.post("/dotaz", data={"query": "A proč?", "conversation_id": CID, "rewrite": "1"},

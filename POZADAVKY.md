@@ -411,3 +411,19 @@ Nezkoumáno, jen náměty:
 
 Souvisí: [[kryton-nasazen]] (66 anglických knih = knihy Bible, stejná
 třída selhání), P1 výše.
+
+---
+
+## K zamyšlení (nezadané, nezanalyzované — jen nápady)
+
+Volnější sekce než P1–P4: věci, které stojí za zvážení časem, ale ještě
+nemají tvar požadavku k analýze.
+
+- **Telegram (a Kryton obecně): volný chat bez vyhledávání v poznámkách.**
+  Dnes každá čerstvá zpráva vždy jde přes `core.search()` + `core.answer()`
+  a systémový prompt vynucuje odpovídat „POUZE na základě dodaného
+  kontextu" — když nic nenajde, vrátí se rovnou pevná hláška, model se ani
+  nezavolá. Žádný režim „jen pokecej" bez týhle vazby na poznámky
+  neexistuje. Mohl by to být samostatný příkaz/přepínač, co obejde
+  `core.search()`/`core.answer()` a jede jen s LLM bez omezení na kontext.
+  Zvažováno 2026-08-11, nezadáno k realizaci.

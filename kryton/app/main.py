@@ -211,7 +211,8 @@ všech dokumentů.</p>{% endif %}
 </form>
 <form method="post" action="/konverzace/smazat" style="margin-top:2rem" """ + SMAZAT + """>
 <input type="hidden" name="conversation_id" value="{{ cid }}">
-<button>Smazat konverzaci</button></form>"""
+<button>Smazat konverzaci</button></form>
+<script>scrollTo(0,document.body.scrollHeight)</script>"""
 
 
 @app.get("/konverzace/{cid}", response_class=HTMLResponse)
