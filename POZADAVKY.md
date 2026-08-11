@@ -349,3 +349,65 @@ takže dva různé nahrané soubory mohly dostat stejné ID. Opraveno na
 stabilní ID přes UPSERT (stejný `source_path` = stejné ID) s monotónním
 čítačem pro nové řádky — věrněji odpovídá reálnému
 `ON CONFLICT ... RETURNING id` v Postgresu.
+
+---
+
+## P4 — Fabrikované citace u přímých faktografických dotazů s nízkým rerank skóre
+
+**Stav: ZAZNAMENÁNO (2026-08-11).** Časem k řešení, teď jen zapsáno.
+
+Zadání, jak vzniklo: nalezeno při kontrole konverzace
+`d0412179-974b-4543-ae58-1394c0729c56` (`/konverzace/...` v Krytonovi),
+ne zadáno dopředu jako P1–P3.
+
+### Co se stalo
+
+Zpráva 45: „Které z těchto zákonů vznikly před rokem 2019?" (navazuje na
+zprávu 44, výčet paragrafů z nahraného dokumentu
+`_uploads/broumy-zastupitelstvo-zadost-6c0932c1.md`).
+
+Zpráva 46 odpověděla: *„Z úryvků [1] lze přímo určit rok vzniku..."*
+a vyjmenovala tři zákony s roky (2015, 2000, 2000), se závěrem, že všechny
+vznikly před rokem 2019. **Roky vyšly fakticky správně** — `č. NNN/RRRR
+Sb.` je přímo rok vyhlášení ve Sbírce zákonů, a to model netrefil náhodou,
+zjevně to zná ze svých obecných znalostí.
+
+**Problém není ve výsledku, ale v citaci.** Všechny čtyři dotažené úryvky
+u zprávy 46 měly rerank skóre kolem nuly (`[1]` 0,00115, zbylé tři pod
+0,00002 — pro srovnání zpráva 44 měla `[1]` na 0,977). Žádný z nich
+neobsahuje rok vzniku žádného zákona. Model si citaci vymyslel — fakt
+odvodil ze svých vlastních znalostí sbírkové notace, ne z dodaného
+kontextu, a přesto tvrdil, že to „lze přímo určit z úryvků".
+
+### Proč je to jiná díra než P1
+
+`core.je_agregacni()` na tenhle dotaz nereaguje — „Které z těchto zákonů
+vznikly před rokem 2019?" neobsahuje žádné z jejích spouštěcích slov
+(kolik, součet, nejvíc, průměr…). P1 řeší agregace nad celým korpusem;
+tohle je fabrikace citace u přímého faktografického dotazu nad už
+citovanými entitami z předchozí zprávy — dotaz, který vůbec nevypadá
+rizikově.
+
+### Proč je to nebezpečné i když tahle odpověď škodu nenadělala
+
+Formát fabrikované odpovědi je nerozeznatelný od odpovědi s pravdivou
+citací. Model měl štěstí, že jeho obecné znalosti o české sbírkové notaci
+byly spolehlivé. U méně známého zákona, jiné země/systému, nebo jakéhokoli
+faktu, který model jen “tuší”, by stejný mechanismus vyrobil stejně
+sebejistou větu se špatným rokem a falešnou citací — a nikdo by to
+nepoznal bez ručního ověření rerank skóre, jako teď.
+
+### Co by stálo za analýzu (až na to dojde)
+
+Nezkoumáno, jen náměty:
+
+- Práh na rerank skóre citace, pod kterým se buď odpověď odmítne, nebo se
+  aspoň připojí varování „nízká jistota zdroje".
+- Rozšíření `je_agregacni()`-stylové heuristiky o detekci „dotaz na fakt,
+  který dodaný kontext explicitně neobsahuje" — obtížnější než klíčová
+  slova, možná vyžaduje druhé volání modelu nebo kontrolu překryvu.
+- Systémový prompt už dnes zakazuje dopočítávat z úryvků (viz P1) — tohle
+  ukazuje, že to samo nestačí, model si přesto citaci připsal.
+
+Souvisí: [[kryton-nasazen]] (66 anglických knih = knihy Bible, stejná
+třída selhání), P1 výše.
