@@ -61,6 +61,22 @@ for s in openrouter_api_key bigpickle_api_key; do
     fi
 done
 
+if podman secret exists mcp_bearer_token 2>/dev/null; then
+    echo "secret mcp_bearer_token už existuje, přeskakuji"
+else
+    MCP_TOKEN=$(openssl rand -hex 32)
+    printf '%s' "$MCP_TOKEN" | podman secret create mcp_bearer_token -
+    echo "=========================================================================="
+    echo "TOKEN PRO MCP SERVER (/mcp) — zadej ho v OpenWorku (Add Custom App,"
+    echo "hlavička Authorization: Bearer <token>):"
+    echo
+    echo "$MCP_TOKEN"
+    echo
+    echo "Na rozdíl od backup_encryption_key jde volně rotovat — ztráta neznamená"
+    echo "nic nenávratného, jen se přegeneruje a přepíše v OpenWorku."
+    echo "=========================================================================="
+fi
+
 echo
 echo "Hotovo. Až budeš mít skutečné klíče:"
 echo "  podman secret rm openrouter_api_key"

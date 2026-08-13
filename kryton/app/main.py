@@ -6,13 +6,14 @@ vejde se do MemoryMax=800M a je to jeden stack s retrievalem.
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import Cookie, FastAPI, File, Form, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from jinja2 import Environment
 from markupsafe import Markup
 
-from . import analytics, config, core, db, ingest, storage, telegram
+from . import analytics, config, core, db, ingest, mcp_server, storage, telegram
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -24,7 +25,41 @@ log = logging.getLogger("kryton")
 # Bez tohohle by se token zapisoval do journalu při KAŽDÉM volání pollingu.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-app = FastAPI(title="Kryton", version="1.0")
+# path="/" — bez toho registruje svou vlastní routu na "/mcp" a po
+# připojení na app.mount("/mcp", ...) by výsledná cesta byla "/mcp/mcp".
+_mcp_app = mcp_server.mcp.http_app(path="/")
+
+
+@asynccontextmanager
+async def _lifespan(app):
+    if not config.AUTH_PASSWORD or not config.SESSION_SECRET:
+        # Port 3001 je publikovaný na 0.0.0.0 a firewall pouští celý segment
+        # 10.20.0.0/24. Běh bez hesla by znamenal poznámky otevřené homelabu,
+        # proto se raději odmítnu spustit, než abych tiše běžel nechráněný.
+        raise RuntimeError("chybi AUTH_PASSWORD nebo SESSION_SECRET — "
+                           "nespoustim se bez autentizace")
+    db.init()
+    analytics.init()
+    telegram.start_background()
+    log.info("start: retrieval=%s litellm=%s model=%s analytika=%s uloziste=%s "
+             "telegram=%s mcp=%s",
+             config.RETRIEVAL_URL, config.LITELLM_URL, config.ANSWER_MODEL,
+             "zapnuta" if analytics.enabled() else "vypnuta",
+             ("%s/%s" % (config.S3_PROFILE, config.S3_BUCKET))
+             if storage.enabled() else "vypnuto",
+             "zapnuty" if telegram.enabled() else "vypnuty",
+             "zapnuty" if config.MCP_BEARER_TOKEN else "vypnuty (chybi MCP_BEARER_TOKEN)")
+    # _mcp_app nese vlastní lifespan (spouští session manager) — bez něj by
+    # se MCP endpoint tvářil živě, ale první požadavek by spadl na
+    # "Task group is not initialized".
+    async with _mcp_app.lifespan(_mcp_app):
+        yield
+    analytics.close()
+    db.close()
+
+
+app = FastAPI(title="Kryton", version="1.0", lifespan=_lifespan)
+app.mount("/mcp", _mcp_app)
 env = Environment(autoescape=True)   # autoescape: obsah poznámek jde do HTML
 COOKIE = "kryton_session"
 
@@ -81,30 +116,6 @@ LOGIN = """<h1>Kryton</h1>{% if err %}<p class="err">{{ err }}</p>{% endif %}
 <form method="post" action="/prihlasit"><p><input type="password" name="password"
  placeholder="Heslo" autofocus></p><p><button>Přihlásit</button></p></form>"""
 
-
-@app.on_event("startup")
-def _startup():
-    if not config.AUTH_PASSWORD or not config.SESSION_SECRET:
-        # Port 3001 je publikovaný na 0.0.0.0 a firewall pouští celý segment
-        # 10.20.0.0/24. Běh bez hesla by znamenal poznámky otevřené homelabu,
-        # proto se raději odmítnu spustit, než abych tiše běžel nechráněný.
-        raise RuntimeError("chybi AUTH_PASSWORD nebo SESSION_SECRET — "
-                           "nespoustim se bez autentizace")
-    db.init()
-    analytics.init()
-    telegram.start_background()
-    log.info("start: retrieval=%s litellm=%s model=%s analytika=%s uloziste=%s telegram=%s",
-             config.RETRIEVAL_URL, config.LITELLM_URL, config.ANSWER_MODEL,
-             "zapnuta" if analytics.enabled() else "vypnuta",
-             ("%s/%s" % (config.S3_PROFILE, config.S3_BUCKET))
-             if storage.enabled() else "vypnuto",
-             "zapnuty" if telegram.enabled() else "vypnuty")
-
-
-@app.on_event("shutdown")
-def _shutdown():
-    analytics.close()
-    db.close()
 
 
 @app.get("/healthz")

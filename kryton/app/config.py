@@ -107,6 +107,13 @@ S3_KEY_PREFIX = os.environ.get("S3_KEY_PREFIX", "originals/")
 # to dělalo dnes. Prefix odděluje obor klíčů od `S3_KEY_PREFIX` (originály).
 BACKUP_S3_BUCKET = os.environ.get("BACKUP_S3_BUCKET", "")
 BACKUP_S3_PREFIX = os.environ.get("BACKUP_S3_PREFIX", "db-backups/")
+
+# ---------------------------------------------------------------------------
+# MCP server (/mcp) — core.search()+core.answer() a core.capture() vystavené
+# externím agentům (OpenWork a dalším MCP klientům). Jiná autentizace než
+# web UI: sdílený token v Authorization hlavičce, viz mcp_server.py.
+# ---------------------------------------------------------------------------
+MCP_BEARER_TOKEN = os.environ.get("MCP_BEARER_TOKEN", "")
 BACKUP_RETENTION_DAYS = int(os.environ.get("BACKUP_RETENTION_DAYS", "30"))
 
 # Telegram můstek (krok 1: jen text — core.capture / core.search+core.answer).

@@ -439,6 +439,10 @@ Secret=telegram_bot_token,type=env,target=TELEGRAM_BOT_TOKEN
 # Krok 2: denni otazka, UTC (18 = 20:00 CEST). POZOR: hodina neni DST-aware,
 # az se v rijnu vrati CET (UTC+1), posune se fakticky na 19:00 mistniho.
 Environment=TELEGRAM_DAILY_QUESTION_HOUR_UTC=18
+# MCP server (/mcp) - core.search/core.answer a core.capture pro externi
+# agenty (napr. OpenWork). Jina autentizace nez web UI, viz app/mcp_server.py.
+# Bez tohohle secretu endpoint existuje, ale odmitne uplne kazdy pozadavek.
+Secret=mcp_bearer_token,type=env,target=MCP_BEARER_TOKEN
 # ZMENA proti navrhu: puvodne PublishPort=100.64.0.1:3001:3001, tedy jen na
 # Tailscale adresu. Dohodnuto publikovat i na homelab LAN 10.20.0.0/24, a
 # protoze DHCP i Tailscale adresa jsou dynamicke, bindujeme 0.0.0.0.

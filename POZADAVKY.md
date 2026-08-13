@@ -414,6 +414,90 @@ třída selhání), P1 výše.
 
 ---
 
+## P5 — MCP server (`/mcp`): core.search/core.answer a core.capture pro OpenWork a další agenty
+
+**Stav: IMPLEMENTOVÁNO A SMOKE-TESTOVÁNO LOKÁLNĚ (2026-08-12).** Čeká na
+vygenerování secretu a nasazení — pak na nastavení v samotném OpenWorku
+(to už je krok mimo tenhle repozitář).
+
+### Odkud to vzniklo
+
+Uživatel se zeptal, jestli lze propojit vlastní [OpenWork](https://github.com/different-ai/openwork)
+(desktopová appka sjednocující MCP capabilities napříč AI nástroji — Claude
+Code, Cursor, ChatGPT, Codex) s Druhým mozkem. OpenWork umí registrovat
+libovolný vlastní MCP server (Settings → Extensions → Add Custom App →
+jméno, URL, případně autentizační hlavička) a zpřístupní ho pak jednotně
+všem připojeným nástrojům přes `search_capabilities`/`execute_capability`.
+
+### Rozhodnutí
+
+1. **Vrací hotovou odpověď z `core.answer()`, ne syrové úryvky.** Pro
+   hlubší zkoumání zdrojů slouží Kryton samotný; tenhle nástroj je pro
+   rychlý dotaz odjinud.
+2. **Čtení i zápis** — kromě `core.search()`+`core.answer()` i
+   `core.capture()`, aby šlo zachytit poznámku přímo z Claude Code/Cursor/ChatGPT.
+3. **Autentizace sdíleným tokenem v `Authorization: Bearer` hlavičce**,
+   ne bez autentizace (jako Infinity) a ne plný OAuth server. Ověřeno
+   přímo v OpenWorku, že appka takovou hlavičku při vypnutém „OAuth
+   requirement" pošle — bez toho by `TokenVerifier` byl k ničemu.
+
+### Implementace
+
+`kryton/app/mcp_server.py` — `FastMCP` instance se dvěma nástroji
+(`hledat`, `zachytit`) a vlastním `TokenVerifier` (`_SdilenyToken`,
+porovnání `hmac.compare_digest`, ne `==`). Bez nastaveného
+`MCP_BEARER_TOKEN` je endpoint zavřený pro každého, ne otevřený.
+Připojeno do `kryton/app/main.py` přes `app.mount("/mcp", ...)`,
+`_startup`/`_shutdown` (`@app.on_event`) nahrazeny jedním `lifespan`,
+protože MCP appka nese vlastní lifespan (spouští session manager) a oboje
+musí běžet společně.
+
+### Pasti, na které stojí za to pamatovat
+
+1. **`mcp.server.fastmcp` (z balíčku `mcp`) je dnes legacy.** Aktivně se
+   vyvíjí samostatný balíček `fastmcp` (jlowin), teď na v3.x/v4 beta —
+   ekosystém k němu přešel, oficiální SDK ho drží jen pro zpětnou
+   kompatibilitu.
+2. **`fastmcp==3.4.7` (i beta 4.0.0b2) má rozbitou závislost** —
+   `fastmcp-slim` vyžaduje `starlette>=1.0.1`, což zatím nemá žádné
+   vydání, co by to splnilo. Nejde nainstalovat vedle `fastapi==0.118.0`
+   (ani samostatně, pip prostě nemá co nabídnout). Použito `fastmcp==2.14.7`
+   — poslední zralá řada, bez konfliktu, ale s podstatně větším stromem
+   závislostí (redis, cryptography, keyring, typer…).
+3. **`fastmcp` 2.x nemá `combine_lifespans`** (ta je jen ve 3.x) — lifespan
+   MCP appky (`_mcp_app.lifespan(_mcp_app)`) se musí vnořit do vlastního
+   `lifespan` ručně přes `async with`.
+4. **`http_app()` defaultně registruje vlastní routu na `/mcp`.** Po
+   připojení přes `app.mount("/mcp", mcp_app)` by výsledná cesta byla
+   `/mcp/mcp`, ne `/mcp`. Oprava: `http_app(path="/")`.
+5. **`fastmcp.Client` s `FastMCP` instancí napřímo (in-process transport)
+   autentizaci vůbec neřeší** — `ValueError: This transport does not
+   support auth`. Ověřit auth jde jen přes skutečné HTTP (i lokálně, přes
+   `uvicorn.Server` v threadu).
+
+### Ověřeno
+
+Smoke test rozšířen o `_SdilenyToken.verify_token()` (správný token,
+špatný token, chybějící secret), přímé volání `hledat.fn()`/`zachytit.fn()`
+nad stejnými stuby jako zbytek testu, a **skutečný HTTP test** — reálný
+`uvicorn` server nad `main.app`, MCP klient přes něj zavolá nástroj se
+správným tokenem (uspěje), špatným (zamítnuto) a bez tokenu (zamítnuto).
+Všech 164 kontrol prochází v `python:3.13-slim`.
+
+RSS po importu `main.py` s `fastmcp` zabudovaným: **~105 MB** — v pohodě
+vůči `MemoryMax=800M`, nezvyšováno preventivně.
+
+### Co zbývá
+
+- Vygenerovat `mcp_bearer_token` (`scripts/02b-secrets-extra.sh`,
+  idempotentní, vypíše hodnotu jednou — na rozdíl od
+  `backup_encryption_key` jde volně rotovat, ztráta není nenávratná).
+- Nasadit (rebuild image, restart `kryton.service`).
+- V OpenWorku: Settings → Extensions → Add Custom App, URL na `/mcp`,
+  hlavička `Authorization: Bearer <token>`.
+
+---
+
 ## K zamyšlení (nezadané, nezanalyzované — jen nápady)
 
 Volnější sekce než P1–P4: věci, které stojí za zvážení časem, ale ještě

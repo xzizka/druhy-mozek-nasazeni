@@ -872,6 +872,80 @@ print("== odhlášení ==")
 r = c.get("/odhlasit", follow_redirects=False)
 check("GET /odhlasit", r.status_code == 303)
 
+print("== MCP server (/mcp) ==")
+import asyncio as _asyncio
+import threading as _threading
+
+import uvicorn as _uvicorn
+from fastmcp import Client as _MCPClient
+
+from app import mcp_server  # noqa: E402
+
+TOKEN = "smoke-test-token"
+main.config.MCP_BEARER_TOKEN = TOKEN
+
+
+def _over(token):
+    return _asyncio.run(mcp_server._SdilenyToken().verify_token(token))
+
+
+check("verify_token přijme správný token", _over(TOKEN) is not None)
+check("verify_token odmítne špatný token", _over("neco-jineho") is None)
+main.config.MCP_BEARER_TOKEN = ""
+check("verify_token odmítne cokoliv, když secret chybí",
+      _over(TOKEN) is None and _over("") is None)
+main.config.MCP_BEARER_TOKEN = TOKEN
+
+res = mcp_server.hledat.fn("kde je HNSW?")
+check("nástroj hledat() zavolá core.search+core.answer",
+      res["odpoved"] == "Odpověď s citací [1]."
+      and res["citace"][0]["source_path"] == "poznamky/test.md",
+      res)
+
+res = mcp_server.zachytit.fn("Poznámka z MCP nástroje.", "Zkouška MCP")
+cesta_mcp = Path(MD, res["ulozeno_do"])
+check("nástroj zachytit() opravdu zapsal soubor",
+      cesta_mcp.exists() and "Poznámka z MCP nástroje." in cesta_mcp.read_text(encoding="utf-8"),
+      res)
+
+_mcp_port = 18931
+_mcp_server_cfg = _uvicorn.Config(main.app, host="127.0.0.1", port=_mcp_port,
+                                   log_level="warning", lifespan="on")
+_mcp_uvicorn = _uvicorn.Server(_mcp_server_cfg)
+_mcp_thread = _threading.Thread(
+    target=lambda: _asyncio.run(_mcp_uvicorn.serve()), daemon=True)
+_mcp_thread.start()
+import time as _time
+_time.sleep(1.5)
+_MCP_URL = f"http://127.0.0.1:{_mcp_port}/mcp"
+
+
+async def _mcp_over_http():
+    async with _MCPClient(_MCP_URL, auth=TOKEN) as cl:
+        r = await cl.call_tool("hledat", {"dotaz": "test"})
+        ok_spravny = r.data["odpoved"] == "Odpověď s citací [1]."
+    try:
+        async with _MCPClient(_MCP_URL, auth="spatny-token") as cl:
+            await cl.call_tool("hledat", {"dotaz": "test"})
+        odmitl_spatny = False
+    except Exception:
+        odmitl_spatny = True
+    try:
+        async with _MCPClient(_MCP_URL) as cl:
+            await cl.call_tool("hledat", {"dotaz": "test"})
+        odmitl_bez = False
+    except Exception:
+        odmitl_bez = True
+    return ok_spravny, odmitl_spatny, odmitl_bez
+
+
+_ok_spravny, _odmitl_spatny, _odmitl_bez = _asyncio.run(_mcp_over_http())
+check("MCP přes skutečné HTTP: správný token projde a zavolá nástroj", _ok_spravny)
+check("MCP přes skutečné HTTP: špatný token odmítnut", _odmitl_spatny)
+check("MCP přes skutečné HTTP: chybějící token odmítnut", _odmitl_bez)
+_mcp_uvicorn.should_exit = True
+_mcp_thread.join(timeout=5)
+
 print()
 if FAIL:
     print(f"SELHALO {len(FAIL)}: {', '.join(FAIL)}")
