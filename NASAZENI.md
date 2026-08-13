@@ -537,6 +537,25 @@ odhalila, jsou body 6 a 7 výš.
            -f /root/deploy/kryton/Containerfile /root/deploy/kryton
        systemctl restart kryton && systemctl status kryton
 
+   **Past nalezená 2026-08-13: `git pull` do `/root/deploy` NEaktualizuje
+   `conf/litellm-config.yaml` u LiteLLM.** Kryton se staví z `/root/deploy`
+   přímo (viz recept výš), ale LiteLLM quadlet mountuje samostatnou kopii —
+   `Volume=/srv/brain/conf/litellm-config.yaml:/app/config.yaml:ro,Z` — a
+   `/srv/brain/conf/` **není symlink** na `/root/deploy/conf/`, je to
+   oddělený soubor. `git pull` ho tiše nezmění; test `/model/info` po
+   „nasazení" změny v `num_retries` (P6) ukázal starou hodnotu, dokud se
+   soubor ručně nezkopíroval. Zjištěno, že tenhle rozjezd trval už od
+   2026-08-10 (poznámka o ministralu v gitu, chyběla na disku).
+
+   Deploy litellm změny konfigurace tedy vyžaduje navíc krok:
+
+       git -C /root/deploy pull
+       cp /root/deploy/conf/litellm-config.yaml /srv/brain/conf/litellm-config.yaml
+       systemctl restart litellm
+
+   Trvalá oprava (nezavedeno, jen navrženo): nahradit `/srv/brain/conf/litellm-config.yaml`
+   symlinkem na `/root/deploy/conf/litellm-config.yaml`, ať `git pull` stačí sám.
+
    **Vícejazyčnost:** `POST /search` bere volitelné `lang` (`cs|en|de|la`).
    Kryton ho **záměrně neposílá** — rozhodnuto 2026-08-09 nechat detekci na
    retrievalu. Když `rewrite` běží, jazyk určí `cheap` ve stejném volání jako
