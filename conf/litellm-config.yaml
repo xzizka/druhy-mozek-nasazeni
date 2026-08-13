@@ -65,7 +65,11 @@ model_list:
       model: openrouter/google/gemma-4-26b-a4b-it:free
       api_key: os.environ/OPENROUTER_API_KEY
       timeout: 90
-      num_retries: 2
+      # Zvednuto 2 -> 3 (P6, 2026-08-12): reasoning->workhorse->backstop
+      # spadl celý najednou na krátkém souběžném zahlcení tří poskytovatelů;
+      # backstop hlásil retry_after_seconds: 3, o to by mohl treti pokus
+      # prehoupnout.
+      num_retries: 3
 
   # -------------------------------------------------------------------
   # Levný model na mechanické úlohy: tagování, titulky, přepis dotazu.
@@ -149,6 +153,10 @@ model_list:
       api_key: os.environ/OPENROUTER_API_KEY
       timeout: 150
       max_tokens: 2500
+      # Pridano 2026-08-12 (P6): drive zadny num_retries, jelo se na
+      # defaultu LiteLLM. backstop je posledni zachrana v retezu
+      # reasoning, proto stejnych 3 jako u workhorse.
+      num_retries: 3
 
   # -------------------------------------------------------------------
   # Volitelný lokální model (fáze 4). Zakomentovaný, dokud llama.cpp

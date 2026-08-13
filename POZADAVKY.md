@@ -498,6 +498,67 @@ vůči `MemoryMax=800M`, nezvyšováno preventivně.
 
 ---
 
+## P6 — Fallback řetěz `reasoning` může spadnout celý najednou
+
+**Stav: ZAZNAMENÁNO (2026-08-12).** Nalezeno vyšetřením reálného selhání
+v Telegramu, ne zadáno dopředu. Časem k řešení.
+
+### Co se stalo
+
+Dotaz přes Telegram 2026-08-12 v 18:30:05 UTC (20:30 tvého času) selhal
+s LiteLLM 429. Log (`journalctl -u litellm`) ukázal celý sled:
+
+1. **`reasoning`** (`openai/big-pickle` přes OpenCode Zen) selhal na
+   **svém vlastním** rate limitu ("Error from provider (Console): Rate
+   limit exceeded").
+2. Fallback `reasoning → workhorse`. **`workhorse`** (gemma přes
+   OpenRouter) dostal 429 s `"limit_source":"upstream_provider_shared_pool"`
+   — to je sdílený fond zdarma u Google AI Studio přes **celý OpenRouter**,
+   ne účtový denní strop 50/den (ten je jiná věc, viz [[cheap-alias-denni-limit]]).
+3. Fallback `workhorse → backstop`. **`backstop`** (`gpt-oss-20b:free`,
+   taky OpenRouter, jiný poskytovatel „Darkbloom") dostal **stejný typ 429**,
+   `retry_after_seconds: 3`.
+4. `backstop` už další fallback nemá (návrhem — viz komentář u `fallbacks`
+   v `litellm-config.yaml`), takže chyba se vrátila až do Krytona a
+   Telegram dostal selhání.
+
+**Tři nezávislí poskytovatelé byli zahlcení ve stejnou chvíli** — smůla,
+ne systémová chyba, a **nesouvisí s testováním n8n** (`upstream_provider_shared_pool`
+je sdílený přes celý OpenRouter, pár volání z jednoho účtu na něj nemá
+měřitelný dopad).
+
+### Co z toho plyne
+
+Fallback řetěz `reasoning → workhorse → backstop` je odolný proti výpadku
+**jednoho** poskytovatele, ne proti korelovanému zahlcení víc poskytovatelů
+najednou — a nic v dnešní konfiguraci proti tomu nechrání.
+
+**Nekonzistence v `num_retries`:** `reasoning` a `workhorse` ho mají
+explicitně na `2`, `backstop` a `cheap-fallback` ne — jedou na defaultu
+LiteLLM, ne na promyšlené hodnotě. Nikde v `router_settings`/`litellm_settings`
+není žádný globální default.
+
+### `num_retries` — rozhodnuto 2026-08-12
+
+**Zvýšeno na `3` u `workhorse` i `backstop`** (`conf/litellm-config.yaml`).
+`backstop` předtím neměl `num_retries` vůbec — jel na defaultu LiteLLM,
+teď explicitně `3`, shodně s `workhorse`. `retry_after_seconds: 3`
+z incidentu naznačuje, že třetí pokus s odstupem pár sekund by tohle
+konkrétní selhání pravděpodobně přečkal.
+
+Vědomý tradeoff: delší čekání na chybu/odpověď u interaktivního Telegramu.
+`cheap-fallback` zůstal beze změny (nesouvisel s incidentem, jiná role).
+
+**Co tím pořád není řešeno:** žádný počet opakování neochrání proti tomu,
+že spadnou **všechny** modely v řetězu zároveň o něco déle, než opakování
+stihnou přečkat — to by řešilo jen doplnění dalšího, nezávislého
+poskytovatele do `backstop`ova fallbacku, což dnešní návrh záměrně nemá
+(řetěz `reasoning` u `backstop` končí).
+
+Souvisí: [[cheap-alias-denni-limit]].
+
+---
+
 ## K zamyšlení (nezadané, nezanalyzované — jen nápady)
 
 Volnější sekce než P1–P4: věci, které stojí za zvážení časem, ale ještě
