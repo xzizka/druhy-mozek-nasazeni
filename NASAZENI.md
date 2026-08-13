@@ -537,24 +537,34 @@ odhalila, jsou body 6 a 7 výš.
            -f /root/deploy/kryton/Containerfile /root/deploy/kryton
        systemctl restart kryton && systemctl status kryton
 
-   **Past nalezená 2026-08-13: `git pull` do `/root/deploy` NEaktualizuje
-   `conf/litellm-config.yaml` u LiteLLM.** Kryton se staví z `/root/deploy`
-   přímo (viz recept výš), ale LiteLLM quadlet mountuje samostatnou kopii —
+   **Past nalezená 2026-08-13, OPRAVENO TRVALE téhož dne: `git pull` do
+   `/root/deploy` neaktualizoval `conf/litellm-config.yaml` u LiteLLM.**
+   Kryton se staví z `/root/deploy` přímo (viz recept výš), ale LiteLLM
+   quadlet mountoval samostatnou kopii —
    `Volume=/srv/brain/conf/litellm-config.yaml:/app/config.yaml:ro,Z` — a
-   `/srv/brain/conf/` **není symlink** na `/root/deploy/conf/`, je to
-   oddělený soubor. `git pull` ho tiše nezmění; test `/model/info` po
-   „nasazení" změny v `num_retries` (P6) ukázal starou hodnotu, dokud se
-   soubor ručně nezkopíroval. Zjištěno, že tenhle rozjezd trval už od
-   2026-08-10 (poznámka o ministralu v gitu, chyběla na disku).
+   `/srv/brain/conf/litellm-config.yaml` **nebyl symlink** na
+   `/root/deploy/conf/`, byl to oddělený soubor. `git pull` ho tiše
+   neměnil; test `/model/info` po „nasazení" změny v `num_retries` (P6)
+   ukázal starou hodnotu, dokud se soubor ručně nezkopíroval. Rozjezd
+   trval už od 2026-08-10 (poznámka o ministralu v gitu, chyběla na disku).
 
-   Deploy litellm změny konfigurace tedy vyžaduje navíc krok:
+   **Oprava:** `/srv/brain/conf/litellm-config.yaml` je teď symlink na
+   `/root/deploy/conf/litellm-config.yaml`. `git pull` + `systemctl restart
+   litellm` teď stačí samo, žádný `cp` navíc. Ověřeno živě — po přesměrování
+   na symlink LiteLLM úspěšně nastartoval a `/model/info` hlásil správné
+   hodnoty (`workhorse`/`backstop` `num_retries: 3`).
 
-       git -C /root/deploy pull
-       cp /root/deploy/conf/litellm-config.yaml /srv/brain/conf/litellm-config.yaml
-       systemctl restart litellm
+   Restart při přesměrování na symlink jednou krátce zaškobrtl na běžné
+   podman/netavark chybě při úklidu síťového namespace
+   (`netavark: open container netns: ... No such file or directory`) —
+   nesouviselo to se symlinkem, `Restart=always` kontejner hned znovu
+   nastartoval bez zásahu.
 
-   Trvalá oprava (nezavedeno, jen navrženo): nahradit `/srv/brain/conf/litellm-config.yaml`
-   symlinkem na `/root/deploy/conf/litellm-config.yaml`, ať `git pull` stačí sám.
+   **Ostatní soubory v `/srv/brain/conf/`** (`litellm-health.sh`,
+   `brain-firewall.nft`, `postgresql-tuning.conf`, `Containerfile.postgres`)
+   mají stejné riziko rozjezdu, jen se zatím neprojevilo, protože se needitují
+   často — zatím ponechány jako kopie, symlinkován jen `litellm-config.yaml`,
+   který se mění nejčastěji.
 
    **Vícejazyčnost:** `POST /search` bere volitelné `lang` (`cs|en|de|la`).
    Kryton ho **záměrně neposílá** — rozhodnuto 2026-08-09 nechat detekci na
