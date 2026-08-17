@@ -28,8 +28,35 @@ ANSWER_MODEL = os.environ.get("ANSWER_MODEL", "reasoning")
 ANSWER_MAX_TOKENS = int(os.environ.get("ANSWER_MAX_TOKENS", "8000"))
 ANSWER_TIMEOUT = float(os.environ.get("ANSWER_TIMEOUT", "180"))
 
+# O kolik déle než `ANSWER_TIMEOUT` čeká HTTP klient. `ANSWER_TIMEOUT` se
+# posílá i V TĚLE požadavku jako deadline pro LiteLLM, a klient musí být
+# shovívavější, jinak se Kryton vzdá dřív, než mu LiteLLM stihne chybu
+# ohlásit (stejná úvaha jako u long pollingu v telegram.py).
+#
+# Proč to vzniklo (P8, 2026-08-17): deadline se LiteLLM neposílal vůbec.
+# Kryton se vzdal po 180 s, ale LiteLLM mlelo dál celkem 743 s, doběhlo na
+# 8000 tokenů a výsledek si uložilo do cache — opakovaný dotaz ho pak vrátil
+# obratem a do Telegramu přišlo 24 000 znaků nesmyslu v šesti zprávách.
+ANSWER_TIMEOUT_MARGIN = float(os.environ.get("ANSWER_TIMEOUT_MARGIN", "15"))
+
 # Kolik chunků poslat modelu jako kontext. Retrieval vrací RESULT_LIMIT=8.
 CONTEXT_CHUNKS = int(os.environ.get("CONTEXT_CHUNKS", "8"))
+
+# Minimální `rerank_score`, aby chunk šel modelu jako kontext (P4 + P7-B).
+# 0 nebo méně = vypnuto, chová se jako dřív.
+#
+# Změřeno 2026-08-17 (`scripts/21-eval-rerank-prah.py`, 16 dotazů, 84 skóre):
+#   trefy, kde retrieval našel správný dokument: 0,332 – 0,998
+#   šum (temporální, agregační, neexistující):   0,000017 – 0,021
+# Mezi 0,021 a 0,332 neleží nic, prahy 0,05–0,3 dávaly shodně 0 chybných
+# řezů. Vybráno 0,1: geometrický střed mezery (√(0,021 × 0,332) ≈ 0,084),
+# a hlavně utne i jediný změřený případ odpovědi ze ŠPATNÉHO zdroje
+# (německý dokument na českou otázku, 0,0507), který by 0,05 propustil.
+#
+# PROVIZORNÍ ČÍSLO: korpus měl při měření 13 dokumentů a 19 chunků, takže
+# střední pásmo 0,05–0,5 (zásahy slabé, ale ještě užitečné) v něm skoro
+# nemá jak vzniknout — 2 skóre z 84. Po nárůstu korpusu pusť skript znovu.
+ANSWER_MIN_RERANK = float(os.environ.get("ANSWER_MIN_RERANK", "0.1"))
 
 # Kolik předchozích zpráv konverzace přiložit k doplňujícímu dotazu.
 # 6 = tři dvojice otázka/odpověď. Strop je tu proto, že odpovědi bývají

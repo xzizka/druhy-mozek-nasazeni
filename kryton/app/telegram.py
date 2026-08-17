@@ -158,9 +158,15 @@ def _handle_message(msg: dict) -> None:
     try:
         res = core.search(text)
         odpoved, _model, _ms = core.answer(text, res["results"])
-    except Exception as e:
+    except Exception:
+        # Text výjimky se uživateli NEPOSÍLÁ. Detail patří do logu (kam ho
+        # dá `log.exception` i s tracebackem), do chatu patří srozumitelná
+        # věta. Dřív se posílalo "Dotaz selhal: %s" % e, což je jednak
+        # nesrozumitelné (uživatel dostal `timed out` nebo kus JSONu od
+        # LiteLLM), jednak zbytečně vynáší vnitřnosti ven z brainu.
         log.exception("telegram: dotaz selhal")
-        _send(chat_id, "Dotaz selhal: %s" % e)
+        _send(chat_id, "Na tenhle dotaz se mi teď nepodařilo odpovědět. "
+                       "Zkus to prosím za chvíli znovu.")
         return
     _send(chat_id, odpoved)
 

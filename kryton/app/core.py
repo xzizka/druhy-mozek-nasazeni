@@ -209,6 +209,44 @@ def history_messages(prior: list[dict]) -> list[dict]:
     return out
 
 
+def dost_relevantni(hits: list[dict]) -> list[dict]:
+    """Vyhodí chunky, které reranker označil za nerelevantní (P4 + P7-B).
+
+    ZAHAZUJÍ SE JEDNOTLIVÉ CHUNKY, nejen se hlídá ten nejlepší — a to je
+    podstatný rozdíl. Kdyby se jen porovnával maximum a pak se poslalo
+    všechno, zůstal by přesně mechanismus P4: dotaz má jednu dobrou trefu
+    a k ní sedm chunků se skóre ~1e-05, a model si citaci připíše k jednomu
+    z těch sedmi. Odsud se šum do promptu vůbec nedostane, takže není k čemu
+    fabrikovat citaci.
+
+    Když po filtru nezbyde nic, `answer()` spadne do své existující větve
+    „v poznámkách jsem nic nenašel" — a když je `extra` neprázdné (ověřená
+    čísla nebo výsledek SQL z P1b), odpoví se z něj, protože to je
+    autoritativní zdroj, ne dohledaný text.
+
+    ČTE SE VÝHRADNĚ `rerank_score`. `rrf_score` je funkce POŘADÍ a leží
+    vždycky kolem 0,016–0,033, tedy přesně v pásmu, kde jsou nízká rerank
+    skóre — jakákoliv záloha na něj by porovnávala nesouměřitelná čísla.
+
+    SELHÁVÁ SE OTEVŘENĚ: chunk bez `rerank_score` (reranking vypnutý nebo
+    starší odpověď retrievalu) se PONECHÁ. Bez signálu se chováme jako dřív;
+    zahodit kontext kvůli chybějícímu poli by z drobné změny v retrievalu
+    udělalo tiché „nic jsem nenašel" na každý dotaz.
+    """
+    prah = config.ANSWER_MIN_RERANK
+    if prah <= 0:
+        return hits
+    out = [h for h in hits
+           if h.get("rerank_score") is None or float(h["rerank_score"]) >= prah]
+    zahozeno = len(hits) - len(out)
+    if zahozeno:
+        log.info("rerank prah %.3f: zahozeno %d z %d chunku (nejlepsi zbyle %s)",
+                 prah, zahozeno, len(hits),
+                 max((h.get("rerank_score") for h in out
+                      if h.get("rerank_score") is not None), default=None))
+    return out
+
+
 def answer(query: str, hits: list[dict], prior: list[dict] | None = None,
            extra: str = "") -> tuple[str, str, int]:
     """Vrátí (odpověď, model, latence_ms).
@@ -218,6 +256,7 @@ def answer(query: str, hits: list[dict], prior: list[dict] | None = None,
     u doplňujícího dotazu bez podstatného jména („a proč?") se sice model
     zorientuje, ale chunky se dohledávají podle té krátké fráze.
     """
+    hits = dost_relevantni(hits)
     ctx = "\n\n".join(
         f"[{i+1}] {h['source_path']}"
         + (f" — {h['heading_path']}" if h.get("heading_path") else "")
@@ -236,14 +275,25 @@ def answer(query: str, hits: list[dict], prior: list[dict] | None = None,
                             + (f"{extra}\n" if extra else "")
                             + uryvky + f"Otázka: {query}"})
 
+    # `timeout` V TĚLE požadavku je deadline pro LiteLLM, `timeout=` u httpx
+    # je deadline klienta — a ten MUSÍ být delší, jinak se Kryton vzdá dřív,
+    # než mu LiteLLM stihne chybu ohlásit. Stejná úvaha jako u long pollingu
+    # v telegram.py, kde se `http_timeout` taky drží nad serverovým `timeout`.
+    #
+    # Bez toho v těle nastane přesně incident z 2026-08-17 (P8): Kryton se
+    # vzdal po 180 s, ale LiteLLM mlel dál CELKEM 743 s, doběhlo na 8000
+    # tokenů a výsledek si uložilo do cache — takže opakovaný dotaz ho vrátil
+    # obratem a uživateli přišlo 24 000 znaků nesmyslu v šesti zprávách.
+    # Práce po deadlinu je jedna škoda, mina v cache na hodinu druhá.
     t0 = time.time()
     r = httpx.post(
         config.LITELLM_URL.rstrip("/") + "/v1/chat/completions",
         headers={"Authorization": f"Bearer {config.LITELLM_API_KEY}"},
         json={"model": config.ANSWER_MODEL,
               "messages": msgs,
-              "max_tokens": config.ANSWER_MAX_TOKENS},
-        timeout=config.ANSWER_TIMEOUT)
+              "max_tokens": config.ANSWER_MAX_TOKENS,
+              "timeout": config.ANSWER_TIMEOUT},
+        timeout=config.ANSWER_TIMEOUT + config.ANSWER_TIMEOUT_MARGIN)
     ms = int((time.time() - t0) * 1000)
     if r.status_code != 200:
         raise RuntimeError(f"LiteLLM {r.status_code}: {r.text[:200]}")
