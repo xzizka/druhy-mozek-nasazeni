@@ -29,6 +29,14 @@ TŘI PASTI, KTERÉ TENHLE SKRIPT VĚDOMĚ OŠETŘUJE:
    přes kandidáty. Práh je proto přenositelný mezi velikostmi korpusu
    podstatně lépe než metriky pořadí — ale viz varování o středním pásmu
    ve výstupu.
+4. **„Odpověď je v korpusu" NENÍ totéž jako „retrieval ji našel."** Past,
+   do které první běh (2026-08-17) spadl: dotaz označený „má projít" vrátil
+   úplně jiný dokument se skóre 0,0507, a protože se počítal jako cena
+   prahu, vyšla z toho těsná rezerva 0,0007 a falešný závěr, že řezat
+   skoro nelze. Proto `čeká_se_dokument` u každého „má projít" dotazu:
+   chybný řez se počítá jen tam, kde retrieval očekávaný dokument
+   SKUTEČNĚ našel. Zbytek jsou selhání retrievalu — vypisují se zvlášť
+   a utnout je je správné chování.
 
 CO TENHLE SKRIPT NAD DNEŠNÍM KORPUSEM ZMĚŘIT NEMŮŽE: korpus má 13 dokumentů
 (zátěžový korpus je smazaný od 2026-08-10), takže STŘEDNÍ PÁSMO skóre
@@ -57,45 +65,58 @@ LIMIT = int(os.environ.get("LIMIT", "8"))
 PRAHY = (0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7)
 
 # ---------------------------------------------------------------------------
-# Sada dotazů. `prejit=True` znamená „tenhle dotaz MÁ projít" — tedy odpověď
-# z poznámek existuje a práh, který ho utne, škodí. `prejit=False` znamená
-# „tady se má přiznat, že nic není".
+# Sada dotazů: (kategorie, má_projít, čeká_se_dokument, dotaz).
 #
-# Dotazy s kotvou míří na obsah, který v korpusu doopravdy je:
-#   01-cesky.md  = ladění vektorových indexů (HNSW, ef_search,
-#                  maintenance_work_mem, spill-to-disk)
-#   denik/…      = osobní zápisy
+# `má_projít=True` znamená „odpověď v korpusu existuje". `čeká_se_dokument`
+# je podstatná ZPŘESNĚNÍ přidané po prvním běhu 2026-08-17 — viz níž.
+#
+# PROČ TO NESTAČÍ ODLIŠIT JEN PODLE `má_projít`: první běh označil dotaz
+# „jak zrychlit dotazy do databáze" jako „má projít", protože odpověď
+# (`ef_search` ladí latenci) v `01-cesky.md` doopravdy je. Retrieval na něj
+# ale vrátil `03-deutsch.md` se skóre 0,0507 — tedy SELHAL bez ohledu na
+# jakýkoliv práh. Kdyby se to počítalo jako „práh škodí", vyšla by z toho
+# těsná rezerva 0,0007 a falešný dojem, že řezat skoro nelze. Ve skutečnosti
+# by práh takový dotaz utnul správně: „nic relevantního nemám" je lepší
+# odpověď než odpověď z německého dokumentu.
+#
+# Chybný řez se proto počítá JEN u dotazů, kde retrieval SKUTEČNĚ NAŠEL
+# očekávaný dokument. Ostatní jsou selhání retrievalu, ne cena prahu —
+# vypisují se zvlášť, protože je to samostatný nález.
+#
+# Obsah, o který se dotazy opírají:
+#   01-cesky.md = ladění vektorových indexů (HNSW, ef_search,
+#                 maintenance_work_mem, spill-to-disk)
 # ---------------------------------------------------------------------------
 DOTAZY = [
     # --- kotva: jednoznačné, MUSÍ přežít každý práh --------------------
-    ("kotva", True, "maintenance_work_mem při stavbě indexu"),
-    ("kotva", True, "co dělá ef_search"),
-    ("kotva", True, "HNSW parametry m a ef_construction"),
+    ("kotva", True, "01-cesky", "maintenance_work_mem při stavbě indexu"),
+    ("kotva", True, "01-cesky", "co dělá ef_search"),
+    ("kotva", True, "01-cesky", "HNSW parametry m a ef_construction"),
 
     # --- vágní, ale odpověď v korpusu JE: riziková zóna prahu ----------
     # Tady se láme, jestli práh škodí. Formulace záměrně nepoužívá slova
     # z textu — uživatel se takhle ptá běžně.
-    ("vagni", True, "proč mi stavba indexu trvá tak dlouho"),
-    ("vagni", True, "jak zrychlit dotazy do databáze"),
-    ("vagni", True, "co se nedá změnit po vytvoření indexu"),
+    ("vagni", True, "01-cesky", "proč mi stavba indexu trvá tak dlouho"),
+    ("vagni", True, "01-cesky", "jak zrychlit dotazy do databáze"),
+    ("vagni", True, "01-cesky", "co se nedá změnit po vytvoření indexu"),
 
     # --- P7-B: temporální, bez kotvy. Obě varianty diakritiky ----------
-    ("temporal", False, "Co jsem dělal včera?"),
-    ("temporal", False, "Co jsem delal vcera?"),
-    ("temporal", False, "Jaké jsou poslední záznamy v deníku?"),
-    ("temporal", False, "Jaké jsou nejnovější poznámky?"),
+    ("temporal", False, None, "Co jsem dělal včera?"),
+    ("temporal", False, None, "Co jsem delal vcera?"),
+    ("temporal", False, None, "Jaké jsou poslední záznamy v deníku?"),
+    ("temporal", False, None, "Jaké jsou nejnovější poznámky?"),
 
     # --- P1: agregační. Odpověď patří /korpus, ne RAGu -----------------
-    ("agregacni", False, "Kolik mám dokumentů?"),
-    ("agregacni", False, "Kolik je kterých knih podle jazyka?"),
+    ("agregacni", False, None, "Kolik mám dokumentů?"),
+    ("agregacni", False, None, "Kolik je kterých knih podle jazyka?"),
 
     # --- P4: fakt nad už citovanými entitami ---------------------------
-    ("fakt-p4", False, "Které z těch zákonů vznikly před rokem 2019?"),
+    ("fakt-p4", False, None, "Které z těch zákonů vznikly před rokem 2019?"),
 
     # --- v korpusu prokazatelně NENÍ -----------------------------------
-    ("chybi", False, "recept na bramborový salát"),
-    ("chybi", False, "kdy mi jede vlak do Berlína"),
-    ("chybi", False, "jaké mám heslo k routeru"),
+    ("chybi", False, None, "recept na bramborový salát"),
+    ("chybi", False, None, "kdy mi jede vlak do Berlína"),
+    ("chybi", False, None, "jaké mám heslo k routeru"),
 ]
 
 
@@ -138,26 +159,48 @@ def main() -> int:
     print("=" * 78)
 
     mereni = []
-    for kat, prejit, q in DOTAZY:
+    for kat, prejit, ceka, q in DOTAZY:
         d = search(q)
         sc = skore(d, q)
         top = max(sc) if sc else 0.0
         cesta = d["results"][0]["source_path"] if d.get("results") else "—"
-        mereni.append({"kat": kat, "prejit": prejit, "q": q,
-                       "top": top, "n": len(sc), "cesta": cesta, "sc": sc})
-        print("%-10s %-5s top=%.6f  n=%d  %-26s %s"
-              % (kat, "PROJIT" if prejit else "REZAT", top, len(sc),
-                 cesta[:26], q[:34]))
+        # Nasel retrieval to, co mel? U 'rezat' dotazu se neptame.
+        nasel = (ceka in cesta) if (prejit and ceka) else None
+        mereni.append({"kat": kat, "prejit": prejit, "q": q, "ceka": ceka,
+                       "top": top, "n": len(sc), "cesta": cesta,
+                       "nasel": nasel, "sc": sc})
+        znacka = "PROJIT" if prejit else "REZAT"
+        if nasel is False:
+            znacka = "MINUL!"
+        print("%-10s %-6s top=%.6f  n=%d  %-26s %s"
+              % (kat, znacka, top, len(sc), cesta[:26], q[:34]))
+
+    # --- selhání retrievalu: samostatný nález, ne cena prahu ---------------
+    minuly = [m for m in mereni if m["nasel"] is False]
+    if minuly:
+        print()
+        print("-" * 78)
+        print("RETRIEVAL MINUL OCEKAVANY DOKUMENT (%d) — samostatny nalez," % len(minuly))
+        print("nesouvisi s prahem: tyhle dotazy jsou spatne uz bez nej.")
+        for m in minuly:
+            print("  %-36s cekal %-12s dostal %s (%.6f)"
+                  % (m["q"][:36], m["ceka"], m["cesta"][:24], m["top"]))
+        print("Do 'chybnych rezu' se NEPOCITAJI — utnout je je spravne chovani:")
+        print("\"nic relevantniho nemam\" je lepsi nez odpoved ze spatneho zdroje.")
 
     # --- rozdělení skóre ---------------------------------------------------
-    maji_projit = [m["top"] for m in mereni if m["prejit"]]
+    # 'ma projit' = odpoved existuje A retrieval ji NASEL. Jen tyhle definuji
+    # cenu prahu; viz komentar u DOTAZY.
+    uspesne = [m for m in mereni if m["prejit"] and m["nasel"] is not False]
+    maji_projit = [m["top"] for m in uspesne]
     maji_rezat = [m["top"] for m in mereni if not m["prejit"]]
     print()
     print("-" * 78)
     print("ROZDELENI NEJLEPSICH SKORE")
-    print("  ma projit (n=%d): min %.6f  median %.6f  max %.6f"
-          % (len(maji_projit), min(maji_projit),
-             statistics.median(maji_projit), max(maji_projit)))
+    print("  ma projit (n=%d, jen ty, kde retrieval NASEL spravny dokument):"
+          % len(maji_projit))
+    print("            min %.6f  median %.6f  max %.6f"
+          % (min(maji_projit), statistics.median(maji_projit), max(maji_projit)))
     print("  ma rezat  (n=%d): min %.6f  median %.6f  max %.6f"
           % (len(maji_rezat), min(maji_rezat),
              statistics.median(maji_rezat), max(maji_rezat)))
@@ -173,7 +216,7 @@ def main() -> int:
     print("%8s  %14s  %14s  %s" % ("prah", "chybne rezy", "spravne rezy", "verdikt"))
     nejlepsi = None
     for p in PRAHY:
-        chybne = [m for m in mereni if m["prejit"] and m["top"] < p]
+        chybne = [m for m in uspesne if m["top"] < p]
         spravne = [m for m in mereni if not m["prejit"] and m["top"] < p]
         verdikt = "OK" if not chybne else "SKODI (%s)" % ", ".join(
             m["kat"] for m in chybne)[:28]
