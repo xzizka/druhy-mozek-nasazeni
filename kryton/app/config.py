@@ -133,3 +133,26 @@ TELEGRAM_POLL_TIMEOUT = int(os.environ.get("TELEGRAM_POLL_TIMEOUT", "30"))
 # 20:00 letního času (CEST). POZOR: neni DST-aware, v zime (CET, UTC+1)
 # se posune fakticky na 19:00 mistniho — snadno zmenitelne bez zasahu do kodu.
 TELEGRAM_DAILY_QUESTION_HOUR_UTC = int(os.environ.get("TELEGRAM_DAILY_QUESTION_HOUR_UTC", "18"))
+
+# Krok 3: přepis hlasovek (app/stt.py). Prázdný klíč = STT vypnuté, bot na
+# hlasovku odpoví, že přepis zatím neumí, místo aby padal na chybějícím klíči.
+#
+# STT_BASE_URL/STT_MODEL, ne pevně zadrátovaný poskytovatel — stejná úvaha
+# jako u S3_ENDPOINT/S3_PROFILE výše. Výchozí hodnoty cílí na OpenRouter,
+# ne na LiteLLM ani přímo na Groq: LiteLLM samo transkripci neumí, jen by
+# proxovalo k dalšímu poskytovateli (nový účet, nový secret). OpenRouter má
+# od 2026-07-22 vlastní /audio/transcriptions se STEJNÝM klíčem jako chat
+# (viz OPENROUTER_API_KEY v litellm-config.yaml) — secret STT_API_KEY se
+# proto v quadletu mountuje ze stejného `openrouter_api_key`, žádný nový.
+#
+# POZOR: model `openai/whisper-1` i to, že OpenRouter vrací JSON (ne holý
+# text jako Groq), zatím NENÍ ověřeno živě — první nasazení chce jedno
+# ruční volání na skutečnou hlasovku, než se krok 3 označí za hotový.
+STT_API_KEY = os.environ.get("STT_API_KEY", "")
+STT_BASE_URL = os.environ.get("STT_BASE_URL",
+                               "https://openrouter.ai/api/v1/audio/transcriptions")
+STT_MODEL = os.environ.get("STT_MODEL", "openai/whisper-1")
+# Prázdné = necháno na automatické detekci Whisperu. Výchozí "cs" dává smysl
+# pro česky psaný druhý mozek, ale jde přepsat/vypnout přes env.
+STT_LANGUAGE = os.environ.get("STT_LANGUAGE", "cs")
+STT_TIMEOUT = float(os.environ.get("STT_TIMEOUT", "60"))

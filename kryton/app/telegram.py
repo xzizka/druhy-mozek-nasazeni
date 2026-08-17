@@ -1,7 +1,10 @@
 """Telegram můstek: textové zprávy <-> core.capture / core.search+core.answer.
 
 KROK 1 — jen text, kanál a routing. KROK 2 — denní otázka na plánovači
-(`daily_loop`), aby nemusela chodit ručně. Hlas je další krok, ještě nezačat.
+(`daily_loop`), aby nemusela chodit ručně. KROK 3 — hlasovky: STT přes
+app/stt.py (Whisper-kompatibilní API), routing STEJNÝ jako u textu — hlasovka
+je jen jiný zdroj textu, ne jiná větev rozhodování (reply/fresh se řeší až
+po přepisu, viz `_je_odpoved_na_bota`).
 
 Long polling, ne webhook — brain nemá (a nemusí mít) veřejně dosažitelný
 HTTPS endpoint, který by Telegram potřeboval zavolat. Polling potřebuje jen
@@ -30,7 +33,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from . import config, core
+from . import config, core, stt
 
 log = logging.getLogger("kryton")
 
@@ -86,6 +89,45 @@ def _je_odpoved_na_bota(msg: dict) -> bool:
     return bool(rep and rep.get("from", {}).get("is_bot"))
 
 
+def _stahni_soubor(file_id: str) -> bytes:
+    """Stáhne soubor z Telegramu podle file_id.
+
+    Odkaz na stažení NESE TOKEN V URL stejně jako volání API v `_call` —
+    stejná past, stejná oprava: chyba se zabalí do RuntimeError MIMO except
+    blok, aby v paměti nezůstal __context__ s URL obsahující token.
+    """
+    info = _call("getFile", file_id=file_id)
+    url = "https://api.telegram.org/file/bot%s/%s" % (
+        config.TELEGRAM_BOT_TOKEN, info["file_path"])
+    try:
+        r = httpx.get(url, timeout=30)
+    except httpx.HTTPError:
+        r = None
+    if r is None:
+        raise RuntimeError("Telegram file download: chyba spojeni")
+    if r.status_code != 200:
+        raise RuntimeError("Telegram file download: HTTP %d" % r.status_code)
+    return r.content
+
+
+def _prepis_hlasovky(chat_id: int, voice: dict) -> str | None:
+    """Stáhne a přepíše hlasovku. Vrací `None`, když se má handler ukončit
+    beze zpracování (chyba, nebo STT vypnuté) — chybová zpráva už uživateli
+    odešla, volající se s tím dál nemá zdržovat."""
+    if not stt.enabled():
+        _send(chat_id, "Hlas zatím neumím přepsat — STT klíč není nastavený.")
+        return None
+    try:
+        data = _stahni_soubor(voice["file_id"])
+        text = stt.transcribe(data)
+    except Exception:
+        log.exception("telegram: prepis hlasovky selhal")
+        _send(chat_id, "Přepis hlasovky selhal, zkus to prosím znovu nebo napiš text.")
+        return None
+    log.info("telegram: hlasovka prepsana (%d znaku)", len(text))
+    return text
+
+
 def _handle_message(msg: dict) -> None:
     frm = msg.get("from", {})
     chat_id = msg.get("chat", {}).get("id")
@@ -94,10 +136,17 @@ def _handle_message(msg: dict) -> None:
                     frm.get("id"))
         return
 
-    text = (msg.get("text") or "").strip()
+    voice = msg.get("voice")
+    if voice:
+        text = _prepis_hlasovky(chat_id, voice)
+        if text is None:
+            return
+    else:
+        text = (msg.get("text") or "").strip()
+
     if not text:
-        # Hlas, foto, sticker... KROK 1 umi jen text, dalsi kroky pribudou.
-        _send(chat_id, "Zatím umím jen text — hlas přibude v dalším kroku.")
+        # Foto, sticker, dokument... zatim nepokryto.
+        _send(chat_id, "Zatím umím jen text a hlas — foto/sticker/dokument zatím ne.")
         return
 
     if _je_odpoved_na_bota(msg):

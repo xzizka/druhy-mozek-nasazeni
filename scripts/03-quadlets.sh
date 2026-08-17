@@ -439,6 +439,14 @@ Secret=telegram_bot_token,type=env,target=TELEGRAM_BOT_TOKEN
 # Krok 2: denni otazka, UTC (18 = 20:00 CEST). POZOR: hodina neni DST-aware,
 # az se v rijnu vrati CET (UTC+1), posune se fakticky na 19:00 mistniho.
 Environment=TELEGRAM_DAILY_QUESTION_HOUR_UTC=18
+# Krok 3: prepis hlasovek pres OpenRouter (app/stt.py), stejny endpoint jako
+# chat (viz litellm-config.yaml). ZAMERNE stejny secret jako openrouter_api_key
+# nize u litellm - zadny novy ucet ani secret, jen dalsi cil pro uz existujici
+# klic. Bez tohodle secretu STT jen zustane vypnute - bot na hlasovku odpovi,
+# ze prepis neumi.
+Environment=STT_MODEL=openai/whisper-1
+Environment=STT_LANGUAGE=cs
+Secret=openrouter_api_key,type=env,target=STT_API_KEY
 # MCP server (/mcp) - core.search/core.answer a core.capture pro externi
 # agenty (napr. OpenWork). Jina autentizace nez web UI, viz app/mcp_server.py.
 # Bez tohohle secretu endpoint existuje, ale odmitne uplne kazdy pozadavek.
