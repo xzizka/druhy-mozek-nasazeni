@@ -623,6 +623,34 @@ o časová slova; metadata cesta po vzoru P1b (SQL `ORDER BY` nad
 `retrieval.document` pod rolí `platform_ro`); práh na rerank skóre.
 Pozor: diakritika mění řazení — „delal vcera" a „dělal včera" daly jiné #1.
 
+### Co se ukázalo TEPRVE po nasazení opravy A
+
+Obojí ověřeno živě po nasazení `b59d9bf`, obojí **ponecháno k samostatnému
+rozhodnutí** (2026-08-17), nic z toho se neopravuje teď.
+
+**1) Chyba B se překlopila z falešně pozitivní na falešně negativní.**
+Odpověď na „Co jsem dělal včera?" je teď:
+
+> Včera (16. 08. 2026) v poznámkách nejsou žádné záznamy.
+
+Datum už sedí, ale tvrzení je **nepravdivé** — `denik/2026-08-16.md` existuje
+a je zaindexovaný, jen ho retrieval na tenhle dotaz nevrátí (viz tabulka
+výš). Je to poctivější chování než dřív (model už netvrdí nic o obsahu,
+který v kontextu nemá), ale pro uživatele pořád špatná odpověď — a v tomhle
+tvaru možná zrádnější, protože „nemám žádné záznamy" zní důvěryhodně.
+**Oprava A tedy chybu B neodstranila, jen jí změnila tvar.**
+
+**2) Blok s datem si model ocitoval jako `[0]`** — „Dnešní datum je pondělí
+17. srpna 2026 **[0]**." Chunky se číslují od `[1]` a datum žádný chunk
+není. Je to **regrese způsobená opravou A**: systémový prompt vyžaduje
+citaci za každým tvrzením, tak si model pro nový blok vymyslel číslo.
+Stejná kategorie kosmetického průsaku jako kdysi „Podle FAKTA O KORPUSU…"
+u P1a. Řešení by byla jedna věta v `dnesni_datum()` („tenhle údaj necituj"),
+neprovedeno.
+
+**Mimochodem:** odpovídal `workhorse` (gemma), ne `reasoning` — tedy
+`reasoning` propadl fallbackem, viz P6.
+
 ---
 
 ## K zamyšlení (nezadané, nezanalyzované — jen nápady)
