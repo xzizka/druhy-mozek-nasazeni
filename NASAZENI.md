@@ -537,6 +537,55 @@ odhalila, jsou body 6 a 7 výš.
            -f /root/deploy/kryton/Containerfile /root/deploy/kryton
        systemctl restart kryton && systemctl status kryton
 
+   **Když se změnil i quadlet (nový `Environment=` nebo `Secret=`), tenhle
+   recept NESTAČÍ** — obraz se přestaví, ale unit pořád jede podle staré
+   generované jednotky. Navíc musí proběhnout:
+
+       /root/deploy/scripts/03-quadlets.sh    # přepíše VŠECHNY quadlety + daemon-reload
+
+   **Skript přepisuje celý `/etc/containers/systemd`, takže před spuštěním
+   zazálohuj** (`cp -a /etc/containers/systemd /root/quadlet-zaloha-$(date +%F-%H%M%S)`)
+   a po spuštění `diff -ru` proti záloze. Ruční úprava živého quadletu by se
+   tím jinak tiše ztratila.
+
+   **Past nalezená 2026-08-17: `Secret=` v quadletu na NEEXISTUJÍCÍ podman
+   secret znamená, že unit VŮBEC NENASTARTUJE** — ne že by jen ta jedna
+   funkce nešla (stejné chování je popsané u `openrouter_api_key`
+   v `scripts/02b-secrets-extra.sh`). Po přidání `Secret=` do quadletu proto
+   VŽDY nejdřív `podman secret ls`, jestli cíl existuje, a až potom restart.
+   Jinak si restartem složíš běžící službu.
+
+   **Past nalezená 2026-08-17: P5 (MCP server) bylo v gitu od 2026-08-13,
+   ale na disku NIKDY.** Živý `kryton.container` byl z 2026-08-10, řádek
+   `Secret=mcp_bearer_token` v něm nebyl a secret `mcp_bearer_token`
+   neexistoval — běžící kontejner `MCP_BEARER_TOKEN` neměl, takže `/mcp`
+   celou dobu odmítal každý požadavek. Zjistilo se to náhodou při nasazování
+   Telegram kroku 3 (`diff` quadletu proti záloze), ne testem. Doplněno
+   tehdy spuštěním `02b-secrets-extra.sh` (idempotentní, dogeneruje jen
+   chybějící secret a vypíše MCP token).
+
+   **Je to TŘETÍ výskyt téhož vzorce** (Kryton napsaný-ale-nespuštěný,
+   litellm-config rozjezd git vs. disk, teď MCP quadlet): *„commitnuto"
+   v tomhle projektu neznamená „nasazeno" a „nasazeno" neznamená „ověřeno".*
+   Po každém nasazení ověř konkrétní věc, která se měla změnit — u env
+   proměnných `podman exec kryton printenv NAZEV`, ne jen `systemctl status`.
+
+   **Past nalezená 2026-08-17: smoke test NESPOUŠTĚJ uvnitř živého
+   `kryton` kontejneru.** `podman exec -i kryton python - < scripts/13-smoke-kryton.py`
+   projde, ale unit má `MemoryMax=800M` a druhý Python proces s celým
+   fastmcp/uvicorn stackem strop překročí — OOM killer zabil testovací
+   proces (`exit 137`), a při jiném pořadí obětí mohl zabít i službu.
+   Správně izolovaně, jak radí docstring testu (podman místo dockeru):
+
+       cd /root/deploy && podman run --rm -i --network=host \
+           -v /root/deploy/kryton:/srv/kryton:ro,Z python:3.13-slim \
+           sh -c 'pip install -q -r /srv/kryton/requirements.txt; cat > /s.py; python /s.py' \
+           < scripts/13-smoke-kryton.py
+
+   Test si `telegram._call` patchuje, takže žádná skutečná zpráva na
+   Telegram neodejde — řádky „otazka dne odeslana" v jeho výstupu jsou ze
+   stubované cesty a neznamenají, že bot něco poslal.
+
    **Past nalezená 2026-08-13, OPRAVENO TRVALE téhož dne: `git pull` do
    `/root/deploy` neaktualizoval `conf/litellm-config.yaml` u LiteLLM.**
    Kryton se staví z `/root/deploy` přímo (viz recept výš), ale LiteLLM
