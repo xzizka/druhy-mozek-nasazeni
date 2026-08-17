@@ -144,6 +144,34 @@ def trigger_reindex() -> None:
         log.warning("reindex se nepodarilo spustit: %s", e)
 
 
+DNY_CZ = ("pondělí", "úterý", "středa", "čtvrtek", "pátek", "sobota", "neděle")
+
+
+def dnesni_datum() -> str:
+    """Dnešní datum do promptu, ~25 tokenů.
+
+    Oprava měřeného selhání (P7, 2026-08-17): prompt datum NEOBSAHOVAL vůbec,
+    takže na dotaz „co jsem dělal včera" model datum odhadoval z názvů souborů
+    v dodaných úryvcích (`denik/RRRR-MM-DD.md`) — a spletl se o den (tvrdil
+    15. 8. místo 16. 8.). Proto ta věta o neodvozování z názvů: přesně tuhle
+    cestu model volil, když neměl nic lepšího.
+
+    Hlavička je schválně čitelná věta, ne nadpis verzálkami — stejný důvod
+    jako u `corpus_facts()`: model ji cituje doslova a „Podle DNEŠNÍ DATUM…"
+    vypadá jako uniklá vnitřnost.
+
+    Datum je v UTC, tedy ve stejné časové zóně, v jaké se pojmenovávají
+    soubory deníku (`capture()` používá `date.today()` a brain běží v UTC) —
+    když jsou obojí stejná konvence, aspoň si neodporují. Cena: mezi místní
+    půlnocí a 02:00 (CEST) je UTC datum o den pozadu, takže zápis z pozdní
+    noci padne do souboru předešlého dne. To je stávající chování `capture()`,
+    tenhle blok ho jen neopravuje ani nezhoršuje.
+    """
+    d = date.today()
+    return ("Dnešní datum (autoritativní — neodvozuj ho z názvů souborů "
+            "v úryvcích): %s %s.\n" % (DNY_CZ[d.weekday()], d.isoformat()))
+
+
 SYSTEM = (
     "Jsi asistent nad osobními poznámkami uživatele. Odpovídej česky a POUZE "
     "na základě dodaného kontextu.\n"
@@ -203,7 +231,8 @@ def answer(query: str, hits: list[dict], prior: list[dict] | None = None,
     facts = corpus_facts()
     uryvky = f"Úryvky z poznámek:\n\n{ctx}\n\n" if ctx else ""
     msgs.append({"role": "user",
-                 "content": (f"{facts}\n" if facts else "")
+                 "content": dnesni_datum()
+                            + (f"{facts}\n" if facts else "")
                             + (f"{extra}\n" if extra else "")
                             + uryvky + f"Otázka: {query}"})
 

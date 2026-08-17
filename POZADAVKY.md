@@ -559,6 +559,72 @@ Souvisí: [[cheap-alias-denni-limit]].
 
 ---
 
+## P7 — Temporální dotazy („včera", „poslední záznamy") dostanou špatnou odpověď
+
+**Stav: ČÁST A OPRAVENA (2026-08-17), ČÁST B ZAZNAMENÁNA.** Nalezeno
+vyšetřením špatných odpovědí na hlasovky přes Telegram, ne zadáno dopředu.
+
+### Co se stalo
+
+Dotazy přes Telegram 2026-08-17 dostaly dvě věcně špatné odpovědi:
+Kryton tvrdil, že **včera bylo 15. 8. 2026** (správně 16. 8.) a že
+**poslední záznamy jsou z 13. 8. a 16. 8.**, přestože deník se ukládá denně.
+
+### Co NENÍ chyba: deník i index jsou v pořádku
+
+Ověřeno, protože podezření mířilo na ukládání:
+
+- na disku `denik/2026-08-10.md` … `2026-08-16.md`, **všech 7 dnů**
+- v `retrieval.document` **taky všech 7** včetně `denik/2026-08-16.md`
+  (`indexed_at 2026-08-16 19:46`)
+- hodiny na brainu i v kontejneru správné a synchronizované (UTC)
+
+Chyba je výhradně v **odpovídání**, ne v zápisu ani indexaci.
+
+### Chyba A — v promptu nebylo dnešní datum (OPRAVENO)
+
+`core.answer()` skládal prompt jako SYSTEM + historie + `corpus_facts()`
++ extra + úryvky + otázka. **Datum nikde.** `date.today()` bylo v `core.py`
+použité jen na jména souborů při zápisu. Model proto „včera" neměl z čeho
+spočítat a odhadoval ho z datumů, která viděl v cestách dodaných úryvků
+(08-10, 08-13, 08-12) — vyšlo 15. 8.
+
+### Chyba B — řazení podle relevance, ne chronologicky (ZAZNAMENÁNO)
+
+Temporální dotaz je dotaz na **řazení metadat**, což vektorové ani lexikální
+hledání strukturálně neumí. Retrieval vrací top-N podle relevance. Změřeno:
+
+| dotaz | co se vrátilo (v tomto pořadí) |
+|---|---|
+| Co jsem dělal včera? | `denik/2026-08-13`, `08-10`, `_uploads/broumy…`, `08-12` |
+| Jaké jsou poslední záznamy v deníku? | `_uploads/broumy-zastupitelstvo`, `01-cesky.md`, `03-deutsch.md`, `08-14` |
+| Jaké jsou nejnovější poznámky? | `_uploads/broumy…`, `08-16`, `08-15` |
+
+U dotazu na „včera" se **16. 8. do výsledků vůbec nedostalo**. Model pak
+čte datumy z cest úryvků a nejvýš postavené vydá za „poslední" — odtud ta
+konkrétní dvojice 13. 8. / 16. 8.
+
+**Rerank skóre je u všech těchto dotazů skoro nula** (0,0032 / 0,0013 /
+2,1e-05) — stejný podpis jako P4: dotaz nemá v textu deníku lexikální ani
+sémantickou kotvu, retrieval vrací šum a model nad šumem odpoví sebejistě.
+
+**`je_agregacni()` to nezachytí** — ověřeno `False` pro všechny temporální
+varianty (`True` jen pro „Kolik mám dokumentů?"). `AGREGACNI_SLOVA` obsahuje
+kolik/pocet/nejvic/serad…, ale nic časového (posledni, nejnovejsi, vcera,
+dnes), takže nepadne ani odkaz na `/korpus`.
+
+**Proč je to vlastní třída, ne duplikát P1 ani P4:** neodpovědtelné z RAGu
+jako P1, sebejisté při nulovém skóre jako P4, ale navíc si model datumy
+nebere ze svých znalostí — **čte je z cest souborů v úryvcích**, takže
+odpověď působí ocitovaně podložená, i když je to jen top-N relevance.
+
+**Náměty k budoucí analýze (nezkoumáno):** rozšířit `AGREGACNI_SLOVA`
+o časová slova; metadata cesta po vzoru P1b (SQL `ORDER BY` nad
+`retrieval.document` pod rolí `platform_ro`); práh na rerank skóre.
+Pozor: diakritika mění řazení — „delal vcera" a „dělal včera" daly jiné #1.
+
+---
+
 ## K zamyšlení (nezadané, nezanalyzované — jen nápady)
 
 Volnější sekce než P1–P4: věci, které stojí za zvážení časem, ale ještě
