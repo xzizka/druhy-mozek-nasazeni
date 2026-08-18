@@ -47,8 +47,30 @@ model_list:
       max_tokens: 4000
 
   # -------------------------------------------------------------------
-  # Pracovní kůň pro běžné úlohy. OpenRouter kvůli tomu, že přepnutí
-  # modelu nevyžaduje nový provider ani nový klíč.
+  # OPRAVA POPISU 2026-08-18. Tenhle blok se dřív jmenoval „pracovní kůň
+  # pro běžné úlohy" a komentáře napříč configem mu připisovaly „titulek
+  # a tagy při indexaci". **Taková úloha v kódu neexistuje.**
+  #
+  # Ověřeno grepem přes celý repozitář: jediné aliasy, které kód nastavuje
+  # jako `model`, jsou `cheap` (`REWRITE_MODEL` v retrievalu) a `reasoning`
+  # (`ANSWER_MODEL` a `ANALYTICS_MODEL` v Krytonovi). Indexer používá LLM
+  # jen na detekci jazyka a jde přes `cheap` — viz docstring `indexer.py`,
+  # krok 3. `workhorse` se v kódu vyskytuje jedině v seznamu modelů, které
+  # smí volat virtual key Krytona (`scripts/03-quadlets.sh:406`), a to
+  # právě proto, aby fungoval fallback.
+  #
+  # SKUTEČNÁ ROLE: **první záchyt fallbacku za `reasoning`.** Nic víc.
+  # Za normálního provozu se nezavolá ani jednou.
+  #
+  # Proč na tom záleží: přesně tenhle alias 2026-08-13 až 17 tiše obsloužil
+  # VŠECHEN provoz Krytona, když big-pickle vyčerpal kvótu (P8). Model se
+  # tu nevybírá pro mechanické úlohy, ale pro to, aby uměl odpovědět na
+  # RAG dotaz s citacemi — což je jiné zadání, než jaké tu bylo napsané.
+  #
+  # Gemma tu roli zvládá: v měření 2026-08-18
+  # (`scripts/24-eval-reasoning.py`) dala 4/4 s mediánem 2,9 s na téže
+  # úloze, na které gpt-oss-120b dal 4/4 za 11,0 s. Zůstává tedy — ale
+  # nově ze změřeného důvodu, ne z omylu.
   # -------------------------------------------------------------------
   - model_name: workhorse
     litellm_params:
@@ -62,7 +84,19 @@ model_list:
       #   - 6 davkovych volani: 5/6 uspech, median 3,6 s, prumer 19 tokenu
       #   - drzi cestinu; nemotron-3-ultra ve 2 z 6 pripadu vypsal anglickou
       #     uvahu misto odpovedi, coz by se tise ulozilo do indexu
-      model: openrouter/google/gemma-4-26b-a4b-it:free
+      #
+      # ZMENA 2026-08-18 (krok 1): odebrana pripona `:free`. TYZ MODEL,
+      # jiny tarif. Duvod je denni strop free tieru 50 pozadavku/den na
+      # cely ucet — kvuli nemu se 2026-08-08 zaindexovalo pet dokumentu
+      # se spatnym jazykem, protoze `detect_language()` pri vycerpani
+      # kvoty tise propadne na DEFAULT_LANG. Placeny tarif strop nema.
+      #
+      # Riziko nulove: je to presne ten model, ktery uz bezi jako
+      # `cheap-fallback` (o dva bloky niz) a ktery byl 2026-08-09 zmeren
+      # na 20/20 detekce jazyka a 10/10 prepis dotazu.
+      #
+      # Cena ~0,015 $/mesic pri 10 indexovanych dokumentech denne.
+      model: openrouter/google/gemma-4-26b-a4b-it
       api_key: os.environ/OPENROUTER_API_KEY
       timeout: 90
       # Zvednuto 2 -> 3 (P6, 2026-08-12): reasoning->workhorse->backstop
@@ -149,7 +183,20 @@ model_list:
   # -------------------------------------------------------------------
   - model_name: backstop
     litellm_params:
-      model: openrouter/openai/gpt-oss-20b:free
+      #
+      # ZMENA 2026-08-18 (krok 1): odebrana pripona `:free`. TYZ MODEL,
+      # jiny tarif — stejny duvod jako u `workhorse` vyse. `backstop` je
+      # posledni clanek fallback retezu za `reasoning`, takze zrovna on
+      # nesmi byt ten, ktery padne na vycerpane kvote; presne to se stalo
+      # 2026-08-12 pri incidentu P6.
+      #
+      # Pozor, P6 to CELE neresi: tehdy sel 429 z
+      # `upstream_provider_shared_pool`, tedy ze sdileneho fondu zdarma,
+      # ktery placeny tarif obchazi — ale kratkodobe 429 od poskytovatele
+      # existuji i u placenych modelu. Proto `num_retries: 3` zustava.
+      #
+      # Cena ~0,003 $/mesic (backstop se volá jen kdyz `reasoning` selze).
+      model: openrouter/openai/gpt-oss-20b
       api_key: os.environ/OPENROUTER_API_KEY
       timeout: 150
       max_tokens: 2500
@@ -157,6 +204,153 @@ model_list:
       # defaultu LiteLLM. backstop je posledni zachrana v retezu
       # reasoning, proto stejnych 3 jako u workhorse.
       num_retries: 3
+
+  # ===================================================================
+  # POKUSNÉ ALIASY NA nexos.ai — přidáno 2026-08-18, NENASAZENO.
+  #
+  # Souběžné aliasy, ne náhrada. Dokud nejsou modely přeměřené na
+  # skutečných promptech, běží ostrý provoz dál po OpenRouteru; tyhle
+  # slouží k A/B srovnání. Přepnutí je pak přejmenování `model_name`,
+  # ne přepis pěti bloků. Rozbor v `NEXOS-ANALYZA.md`.
+  #
+  # SPOLEČNÉ POZNÁMKY KE VŠEM PĚTI:
+  #
+  # * `openai/` je jako u `reasoning`/OpenCode Zen značka „OpenAI-
+  #   kompatibilní endpoint", ne firma OpenAI. Na providera jde jméno
+  #   bez prefixu.
+  #
+  # * Jméno modelu je ZOBRAZOVANÝ NÁZEV včetně mezer (`GPT 5 nano`),
+  #   ne `provider/model` jako na OpenRouteru.
+  #
+  # * MODEL MUSÍ BÝT ZAPNUTÝ V KONZOLI (Models -> add a model), jinak
+  #   vrátí `{"error":{"code":100110,"message":"Model not found"}}`.
+  #   K 2026-08-18 bylo ze 145 chat modelů zapnutých 14 a ANI JEDEN
+  #   z pěti níže mezi nimi nebyl. Ověřeno přesným názvem, malými
+  #   písmeny i bez pomlčky — nejde o překlep ve jméně.
+  #
+  # * POZOR NA DVĚ SOUSTAVY UUID. `/v1/models` vrací u zapnutých modelů
+  #   `nexos_model_id` (instance ve workspace) a TO JE volatelné.
+  #   `/v1/models/all` vrací `id`, což je globální ID katalogu, a to
+  #   volatelné NENÍ — dá stejné `Model not found` jako vypnutý model.
+  #   Ověřeno na Gemini: workspace UUID odpoví, globální ne.
+  #
+  # * STEJNOJMENNÉ VARIANTY. Týž zobrazovaný název může v katalogu
+  #   existovat víckrát za různé ceny (`GPT-OSS 120b` je od nexos.ai za
+  #   0,800/1,600 i od Azure za 0,150/0,600; `GPT 5 nano` má tři
+  #   varianty). Dokud je zapnutá jedna, jméno stačí. Jakmile zapneš
+  #   druhou, jméno přestane být jednoznačné a MUSÍŠ přejít na
+  #   `nexos_model_id` — vypíše ho `scripts/23-nexos-pripravenost.py`.
+  #
+  # * Gateway má VLASTNÍ cache (hlavička `x-nexos-cache`) nad rámec té
+  #   v `litellm_settings` níže. Při měření to znamená dvě místa, kde
+  #   se odpověď může vrátit zadarmo a netestovat nic.
+  #
+  # * Secret: `printf %s 'nexos-...' | podman secret create nexos_api_key -`
+  #   a do `litellm.container` přidat
+  #   `Secret=nexos_api_key,type=env,target=NEXOS_API_KEY`
+  #   + `Environment=NEXOS_API_BASE=https://api.nexos.ai/v1`.
+  # ===================================================================
+
+  # Přepis dotazu a detekce jazyka. NEJLEVNEJSI POUZITELNY z osmnactky,
+  # kterou org povoluje (0,750/4,500). Levnejsi zapnuty `Gemini 3 Flash
+  # Preview` (0,500/3,000) je reasoning model a v mereni 2026-08-18 dal
+  # 0/20 na detekci jazyka i 0/10 na prepis — spotreboval `max_tokens`
+  # na uvahu a vratil prazdny content.
+  #
+  # Proti dnesnimu `ling-2.6-flash` je to 75x drazsi na vstupu a 150x na
+  # vystupu, a jeste o kus horsi: 8/10 proti 10/10 na prepisu. Nic
+  # levnejsiho ani lepsiho v povolenem katalogu NENI — `GPT 5 nano`
+  # v nem chybi, viz kapitola 3c v NEXOS-ANALYZA.md.
+  - model_name: cheap-nexos
+    litellm_params:
+      model: openai/GPT 5.4 mini
+      api_base: os.environ/NEXOS_API_BASE
+      api_key: os.environ/NEXOS_API_KEY
+      timeout: 60
+
+  # Záloha pro `cheap-nexos`. Z povolene osmnactky je to jediny dalsi
+  # model, ktery mereni prosel — 20/20 detekce a 9/10 prepis, tedy
+  # LEPSI nez `GPT 5.4 mini` nad nim, jen drazsi. Region EU.
+  #
+  # Ma stejnou vadu jako `GPT 5.4 mini`: dotaz "databases running faster"
+  # urcil jako cestinu a `faster` prepsal na `beh` — presne tu
+  # normalizaci, kterou REWRITE_PROMPT zakazuje, protoze zabiji shodu
+  # v lexikalni vetvi.
+  - model_name: cheap-fallback-nexos
+    litellm_params:
+      model: openai/Claude Haiku 4.5
+      api_base: os.environ/NEXOS_API_BASE
+      api_key: os.environ/NEXOS_API_KEY
+      timeout: 60
+
+  # Titulek a tagy při indexaci. TOHLE JE NEJSILNEJSI DUVOD cokoliv
+  # stehovat: dnesni `workhorse` jede na `:free`, tedy pod dennim
+  # stropem 50/den, kvuli kteremu se 2026-08-08 zaindexovalo 5 dokumentu
+  # se spatnym jazykem. Placeny model strop nema a stoji ~0,16 $/mesic.
+  # Rodokmen dnesni gemmy zachovat NEJDE, Gemma v povolenem katalogu
+  # neni vubec.
+  - model_name: workhorse-nexos
+    litellm_params:
+      model: openai/GPT 5.4 mini
+      api_base: os.environ/NEXOS_API_BASE
+      api_key: os.environ/NEXOS_API_KEY
+      timeout: 90
+      num_retries: 3
+
+  # PŮVODNĚ TU MĚL BÝT `GPT-OSS 20b` — jediný alias, kde by zůstal
+  # týž model jako dnes. Nejde to: na nexos.ai ho hostuje jen Groq,
+  # ktery org nepovoluje. `GPT 4.1 nano` tam taky neni.
+  #
+  # Zbyva Claude Haiku 4.5, coz je proti dnesnimu `gpt-oss-20b:free`
+  # obrat o 180 stupnu: backstop byl vybran jako "posledni zachrana,
+  # ktera aspon neco vrati", a ted by to byl NEJKVALITNEJSI model
+  # v retezu. Za 1,100/5,500 $/M. Nedava to smysl a je to dalsi duvod
+  # `backstop` na nexos.ai vubec nestehovat — viz doporuceni v analyze.
+  - model_name: backstop-nexos
+    litellm_params:
+      model: openai/Claude Haiku 4.5
+      api_base: os.environ/NEXOS_API_BASE
+      api_key: os.environ/NEXOS_API_KEY
+      timeout: 150
+      max_tokens: 2500
+      num_retries: 3
+
+  # Náhrada za big-pickle. POZOR NA VARIANTU: `GPT-OSS 120b` je
+  # v katalogu dvakrát — hostovaný nexos.ai za 0,800/1,600 (a právě
+  # ten je zapnutý, workspace UUID 6d8aec78-893f-4c89-b4e0-40c20751cf0a)
+  # a přes Azure za 0,150/0,600, tedy 5,3x levněji. Rozdíl není
+  # v přirážce, ale v hostování.
+  #
+  # AŽ ZAPNEŠ AZURE VARIANTU, PŘEPIŠ `model:` NA JEJÍ `nexos_model_id`.
+  # Obě varianty se jmenují stejně, takže jméno níže by pak mířilo
+  # nedefinovaně — nejspíš na tu drahou, protože je zapnutá déle.
+  #
+  # Je to reasoning model, takže platí tatáž past jako u big-pickle:
+  # tokeny padnou na úvahu dřív, než začne psát. `max_tokens` proto
+  # zůstává v tisících. Změřeno 2026-08-18, že `Gemini 3 Flash Preview`
+  # na tuhle past doplácí naplno — při max_tokens=20 spotřeboval 17
+  # tokenů na reasoning a vrátil prázdný content ve 20 z 20 pokusů.
+  # ROZHODNUTO 2026-08-18: zapnout OBĚ varianty a změřit
+  # (`scripts/24-eval-reasoning.py`). Proto se tady adresuje přes
+  # `nexos_model_id`, ne jménem — obě se jmenují `GPT-OSS 120b` a jménem
+  # bys nevěděl, kterou voláš.
+  #
+  # UUID níže je varianta hostovaná nexos.ai (0,800/1,600, region EU),
+  # ověřená jako zapnutá 2026-08-18. UUID té od Azure doplň, až ji
+  # v konzoli zapneš — vypíše ho `scripts/23-nexos-pripravenost.py`.
+  - model_name: reasoning-nexos
+    litellm_params:
+      model: openai/6d8aec78-893f-4c89-b4e0-40c20751cf0a
+      api_base: os.environ/NEXOS_API_BASE
+      api_key: os.environ/NEXOS_API_KEY
+      timeout: 120
+      num_retries: 2
+      max_tokens: 4000
+
+  # POZN. 2026-08-18: varianta TEHOZ modelu od Azure za 0,150/0,600
+  # (5,3x levneji) v konzoli PRIDAT NEJDE — org povoluje jen osmnact
+  # modelu a Azure varianta mezi nimi neni. Rozhodnuti "zapnout obe
+  # a zmerit" tim padlo; merit neni co.
 
   # -------------------------------------------------------------------
   # Volitelný lokální model (fáze 4). Zakomentovaný, dokud llama.cpp
@@ -203,11 +397,26 @@ router_settings:
   # POZOR: fallback na jiny model_group vyzaduje, aby ho virtual key smel
   # volat. Klic `retrieval-service` mel puvodne models=["cheap"] a fallback
   # by se o to tise rozbil - musi tam byt i "cheap-fallback".
-  # `workhorse` fallback dal nema: dela jinou ulohu (titulek a tagy),
-  # na ktere ling-2.6-flash zmereny NENI.
+  # `workhorse` fallback dal nema — a nepotrebuje ho: sam JE fallback
+  # a za nim v retezu stoji `backstop`. (Drivejsi zduvodneni „dela jinou
+  # ulohu, titulek a tagy" bylo mylne, viz opravu u definice aliasu.)
+  #
+  # POZOR PO ZMENE 2026-08-18: `workhorse` a `cheap-fallback` ted miri na
+  # UPLNE TYZ model (placena gemma-4-26b-a4b-it). Drive to byly dva tarify
+  # tehoz modelu, ted uz ani to ne. NEPRIDAVEJ mezi ne fallback — byl by
+  # to presne ten no-op, kvuli kteremu se 2026-08-09 rusil hop
+  # `workhorse -> cheap`: fallback by sahal na tentyz endpoint, ktery
+  # prave selhal. Oddelene zustavaji kvuli opravnenim virtual keys
+  # (`retrieval-service` smi `cheap-fallback`, ale `workhorse` ne).
   fallbacks:
     - reasoning: ["workhorse", "backstop"]
     - cheap: ["cheap-fallback"]
+    # Pokusna vetev nexos.ai (2026-08-18). Zrcadli ostrou vetev vcetne
+    # zasady, ze `workhorse` a `cheap` fallback na `backstop` NEMAJI —
+    # duvod je tentyz: plni index a verohodny nesmysl je tam horsi nez
+    # nahlas spadla indexace.
+    - reasoning-nexos: ["workhorse-nexos", "backstop-nexos"]
+    - cheap-nexos: ["cheap-fallback-nexos"]
   allowed_fails: 2
   cooldown_time: 30
 
