@@ -234,24 +234,32 @@ ContainerName=litellm
 # to spravne a port zacne odmitat spojeni, i kdyz sluzba bezi. Pevna IP
 # tenhle rezim odstrani: duplicitni pravidlo miri na stejnou adresu.
 IP=10.89.7.12
-# PIN NA DIGEST, 2026-08-18. Drive tu bylo `:main-stable`, coz je POHYBLIVY
+# PIN NA DIGEST, 2026-08-18. Drive tu bylo :main-stable, coz je POHYBLIVY
 # tag — a litellm-config.yaml sam nahore rika "Image pinuj na konkretni
 # stable tag, ne main-latest, LiteLLM vydava velmi casto a DB migrace byvaji
-# breaking". `main-stable` tu vetu porusoval, jen mene okate nez
-# `main-latest`.
+# breaking". Tag :main-stable tu vetu porusoval, jen mene okate nez
+# :main-latest.
 #
 # Overeno 2026-08-18 proti registru: brain bezel sha256:50e647bd (LiteLLM
-# 1.95.0), zatimco `main-stable` uz ukazoval na sha256:468c25f3. Jakykoliv
-# `podman pull`, prestavba hostitele nebo obnova ze zalohy by tedy skocila
+# 1.95.0), zatimco :main-stable uz ukazoval na sha256:468c25f3. Jakykoliv
+# "podman pull", prestavba hostitele nebo obnova ze zalohy by tedy skocila
 # na jinou verzi BEZ jakekoliv zmeny v repozitari — tichy posun stejne
 # kategorie jako nesynchronizovany symlink z 2026-08-13.
 #
-# Digest, ne verzovany tag, protoze verzovane stable tagy (`v1.97.0-stable`
+# Digest, ne verzovany tag, protoze verzovane stable tagy (v1.97.0-stable
 # apod.) v registru NEEXISTUJI — overeno vylistovanim tagu z ghcr.io.
 # Digest je navic imutabilni z definice.
 #
-# UPGRADE se ted dela vedome: zmen digest tady, zaloz databazi `litellm`
+# UPGRADE se ted dela vedome: zmen digest tady, zaloz databazi litellm
 # (Prisma migrace) a nasad. Aktualni upstream k 2026-08-18 je 1.97.0.
+#
+# POZOR PRI EDITACI TOHOHLE BLOKU: heredoc nize je NEUVOZENY, takze shell
+# v nem interpretuje $ i zpetne apostrofy. Pri prvnim zapisu tohohle
+# komentare se zpetne apostrofy kolem jmen tagu vyhodnotily jako prikazy —
+# do logu spadlo sest "command not found" a jeden "podman pull" se skutecne
+# spustil (nastesti bez argumentu, takze jen zahlasil chybu). V komentarich
+# uvnitr heredocu proto NEPOUZIVEJ zpetne apostrofy ani $; bez escapovani
+# to spousti prikazy pri kazdem nasazeni.
 Image=ghcr.io/berriai/litellm@sha256:50e647bd5ee32010317378335d5830dbbcd793b4dd1a9a4460bd34a9272cda95
 Network=brain.network
 # ZMENA proti navrhu: publikovano na homelab LAN i Tailscale (bind 0.0.0.0).
