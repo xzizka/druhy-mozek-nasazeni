@@ -354,7 +354,9 @@ stabilní ID přes UPSERT (stejný `source_path` = stejné ID) s monotónním
 
 ## P4 — Fabrikované citace u přímých faktografických dotazů s nízkým rerank skóre
 
-**Stav: ZAZNAMENÁNO (2026-08-11).** Časem k řešení, teď jen zapsáno.
+**Stav: ČÁSTEČNĚ OŠETŘENO (2026-08-17), ALE REPRODUKOVÁNO ŽIVĚ
+(2026-08-18) — NEZAVŘENO.** Práh na rerank skóre pokrývá jen jednu ze dvou
+variant; druhá je pořád otevřená. Podrobně v „Stav k 2026-08-18" na konci.
 
 Zadání, jak vzniklo: nalezeno při kontrole konverzace
 `d0412179-974b-4543-ae58-1394c0729c56` (`/konverzace/...` v Krytonovi),
@@ -411,6 +413,76 @@ Nezkoumáno, jen náměty:
 
 Souvisí: [[kryton-nasazen]] (66 anglických knih = knihy Bible, stejná
 třída selhání), P1 výše.
+
+### Stav k 2026-08-18
+
+**Co práh vyřešil.** `ANSWER_MIN_RERANK=0.1` (nasazeno 2026-08-17, změřeno
+`scripts/21-eval-rerank-prah.py`) filtruje chunky v `core.dost_relevantni()`.
+Když po filtru nezbyde nic a `extra` je prázdné, `answer()` vrátí pevnou
+větu „V poznámkách jsem k tomu nic nenašel." a **model se vůbec nezavolá**,
+takže nemá jak fabrikovat. Původní případ z P4 měl skóre 0,00115 a niž,
+takže by tímhle sítem neprošel.
+
+**Ale to je jen jedna varianta.** Skóre měří relevanci CHUNKU k DOTAZU,
+ne to, jestli chunk obsahuje konkrétní požadovaný fakt. Když je kontext
+relevantní (a tedy nad prahem), ale ten fakt v něm není, práh nepomůže.
+
+**Reprodukováno živě 2026-08-18** (`scripts/27-eval-p4-castecna-fabrikace.py`,
+proti nasazenému aliasu `reasoning` = gpt-oss-120b): fabrikace ve **2 ze 3**
+dotazů, kde požadovaný fakt v úryvcích nebyl.
+
+| dotaz | odpověď modelu | |
+|---|---|---|
+| „Které z těchto zákonů vznikly před rokem 2019?" nad úryvkem, kde jsou jen čísla zákonů | *„zákon č. 106/1999 Sb. (z roku 1999) – [1], zákon č. 128/2000 Sb. (z roku 2000) – [1]"* | **fabrikace, přesně původní případ P4** |
+| „Jaká je maximální dimenze, kterou halfvec podporuje?" nad úryvkem se `halfvec(1024)` | *„Maximální dimenze je 1024 – v poznámkách je uvedeno použití halfvec(1024) [1]"* | **fabrikace** — halfvec zvládá 16 000 (4 000 pro HNSW index) |
+| „Jakou funkci Jan Novák zastává?" nad úryvkem bez funkce | *„V poznámkách není uvedeno, jakou funkci Jan Novák zastává. [1]"* | správně |
+
+### Dva různé mechanismy, ne jeden
+
+Ty dvě fabrikace vznikly jinak a to je pro řešení podstatné:
+
+1. **Z vlastních znalostí modelu.** U zákonů model ví, že `č. NNN/RRRR Sb.`
+   nese rok, a doplnil ho. Fakt vyšel správně, citace je falešná.
+2. **Přečtením úryvku nad jeho výpověď.** U `halfvec(1024)` model z „použito
+   s 1024" udělal „maximum je 1024". **Tohle je horší** — vypadá to
+   podloženěji než varianta 1, protože to číslo v úryvku doopravdy je,
+   jen netvrdí, co model tvrdí. A výsledek je fakticky špatný.
+
+### Vedlejší nález: citace se neberou z textu odpovědi
+
+`main.py` skládá seznam citací z `hits`, ne parsováním odpovědi. Takže
+u odpovědi se zobrazí citace včetně rerank skóre **bez ohledu na to,
+jestli je model použil** — a fabrikovaná odpověď je od pravdivé
+nerozeznatelná i v UI. To je přímo ten důvod, proč se P4 našla až ruční
+kontrolou skóre.
+
+Model také v jednom případě napsal citaci jako `【1】` (plná šířka) místo
+`[1]`. Data to nerozbije, protože se citace neparsují — ale čitelnost ano.
+
+### Poučení k metodice měření
+
+Automatický detektor fabrikace (seznam zakázaných slov) nahlásil **1 ze 3**,
+skutečnost byla **2 ze 3** — u `halfvec` číslo „1024" v mém seznamu
+zakázaných hodnot nebylo, protože jsem čekal, že si model vymyslí 4000
+nebo 16000. Je to **třetí falešné OK z klíčových slov během jednoho dne**
+(viz totéž u detektoru přiznání v `24-eval-reasoning.py`). U volného textu
+platí, že klíčová slova měří formulaci, ne chování — skript proto tiskne
+celé odpovědi a skóre je jen vodítko.
+
+### Návrhy k rozhodnutí (nezanalyzováno)
+
+1. **Ověřovací druhé volání.** Po vygenerování odpovědi se model zeptá
+   sám sebe, jestli každé tvrzení doslova vyplývá z úryvků. Zdvojnásobí
+   cenu i latenci `reasoning` (dnes ~0,059 $/měsíc, takže absolutně nic),
+   ale je to jediný návrh, který pokryje OBA mechanismy.
+2. **Zpřísnit SYSTEM prompt** proti čtení nad výpověď — dnes zakazuje
+   „nedomýšlej si", což na variantu 2 zjevně nestačí. Levné, ale
+   podle dnešního měření nespolehlivé.
+3. **Nechat být** a spolehnout se, že uživatel citace kontroluje. Legitimní
+   u systému pro jednoho člověka, ale pak by to mělo být rozhodnuté.
+
+Souvisí: P10 (Whisper halucinuje na vstupu — tatáž kategorie tichého
+selhání, jen na druhém konci pipeline).
 
 ---
 
