@@ -653,6 +653,68 @@ neprovedeno.
 
 ---
 
+## P9 — `cheap` nemá `num_retries` a propadá na 7× dražší model
+
+**Stav: ZAZNAMENÁNO (2026-08-18).** Nalezeno při smoke testu po nasazení
+kroků 2 a 3, ne zadáno dopředu. Časem k řešení.
+
+### Co se stalo
+
+Kontrolní volání aliasu `cheap` přes LiteLLM vrátilo v poli `model`
+hodnotu `google/gemma-4-26b-a4b-it` místo `cheap` — tedy propad na
+`cheap-fallback` (viz mechanismus rozpoznávání propadu z opravy (f)).
+
+Zopakováno s `"fallbacks": []`, aby se chyba neschovala: **`cheap`
+uspěl**, ling funguje. Přímé volání `inclusionai/ling-2.6-flash` na
+OpenRouteru pak ukázalo příčinu:
+
+    429 "inclusionai/ling-2.6-flash is temporarily rate-limited upstream"
+    provider_name: Novita
+    limit_source: upstream_provider_shared_pool
+
+Je to **tentýž `upstream_provider_shared_pool` jako u P6**, jen na jiném
+modelu. Fallback zafungoval správně a uživatel by nic nepoznal.
+
+### Proč to stojí za řešení
+
+1. **`cheap` nemá `num_retries` vůbec** — jede na defaultu LiteLLM,
+   zatímco `workhorse` i `backstop` mají po P6 nastavené `3`. Je to
+   nekonzistence, která vznikla tím, že se `cheap` řešil dřív (2026-08-09)
+   než P6 (2026-08-12).
+2. **Propad stojí 7× víc.** `ling-2.6-flash` je 0,010/0,030 $/M,
+   `cheap-fallback` (placená gemma) 0,070/0,340 — tedy sedminásobek na
+   vstupu a jedenáctinásobek na výstupu. A podle měření z 2026-08-09 je
+   gemma i pomalejší (medián 1,44 s proti 0,88 s u linga).
+3. **OpenRouter u toho 429 sám radí „retry shortly"**, takže jeden
+   opakovaný pokus by pravděpodobně prošel.
+
+### Co pomoct NEMŮŽE
+
+Trik s `extra_body.provider`, který 2026-08-18 vyřešil rozptyl latence
+u `reasoning`, tady **nefunguje**: `ling-2.6-flash` má na OpenRouteru
+**jediného poskytovatele, Novitu**, takže není kam přesměrovat.
+
+Za pozornost stojí, že `uptime_last_1d` u Novity hlásil **100 %**,
+a přesto 429 přišel — **uptime v katalogu OpenRouteru rate limity
+nezachycuje** a nelze se na něj při výběru poskytovatele spoléhat.
+
+### Návrh k rozhodnutí
+
+`num_retries: 2` u aliasu `cheap`. Rozpočet na to je: `REWRITE_TIMEOUT`
+je 12 s a ustálené volání `cheap` trvá 1,1–4,8 s, takže jeden opakovaný
+pokus se vejde, tři ne.
+
+**Rozhodnutí odloženo**, protože jde o horkou cestu **každého hledání**
+a jeden výskyt ve třech voláních může být souběh. Před změnou změřit,
+jak často ten 429 chodí — třicet volání `cheap` s vypnutým fallbackem
+a spočítat, kolik jich spadne.
+
+Alternativa, kdyby se ukázalo, že 429 chodí často: vlastní klíč k Novitě
+přes BYOK (OpenRouter to sám nabízí jako remedy), čímž se z rate limitu
+sdíleného fondu vystoupí. Nezanalyzováno.
+
+---
+
 ## K zamyšlení (nezadané, nezanalyzované — jen nápady)
 
 Volnější sekce než P1–P4: věci, které stojí za zvážení časem, ale ještě
