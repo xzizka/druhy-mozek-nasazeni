@@ -715,6 +715,66 @@ sdíleného fondu vystoupí. Nezanalyzováno.
 
 ---
 
+## P10 — Whisper na ne-řeči halucinuje a přes reply to zapíše do poznámek
+
+**Stav: ZAZNAMENÁNO (2026-08-18).** Nalezeno při ověřování kontraktu
+OpenRouteru pro krok 3 telegramového můstku, ne zadáno dopředu.
+
+### Co se stalo
+
+Při živém ověření `POST /api/v1/audio/transcriptions` (dosud jen
+z dokumentace) jsem poslal **dvousekundový sinusový tón 300 Hz** — tedy
+zvuk bez jediného slova. Whisper nevrátil prázdný text, ale:
+
+    {"text": "www.hradeckesluzby.cz", "usage": {"seconds": 3, "cost": 0.0003}}
+
+Je to známé chování Whisperu na ne-řeči, ale pro tenhle systém má
+konkrétní důsledek.
+
+### Proč to vadí právě tady
+
+Hlasovka jde **stejnou větví jako text** (vědomé rozhodnutí, hlas je jen
+jiný zdroj textu). Takže:
+
+| jak zpráva přijde | co se stane s halucinací |
+|---|---|
+| čerstvá zpráva | jde do `core.search()` — vrátí nesmyslné výsledky, uživatel to vidí |
+| **reply (gesto)** | jde do `core.capture()` — **zapíše smyšlenou větu do poznámek** |
+
+Ta druhá řádka je ten problém. Omylem odeslaná hlasovka — zmáčknutý
+mikrofon v kapse, ticho, šum — se **nepozná jako prázdná** a v poznámkách
+zůstane věrohodně vypadající věta, kterou nikdo nevyslovil. A protože se
+poznámky indexují, dostane se to i do vyhledávání.
+
+Je to přesně kategorie **„věrohodný nesmysl je horší než selhání"**, na
+které tenhle projekt staví rozhodnutí o `backstop` i o tom, proč `cheap`
+a `workhorse` nemají fallback na `backstop`.
+
+### Co se dnes proti tomu NEDĚJE
+
+`stt.transcribe()` vrací `r.json()["text"].strip()` a volající kontroluje
+jen prázdný řetězec. Halucinace prázdná není, takže projde.
+
+### Návrhy k rozhodnutí (nezanalyzováno)
+
+1. **Prahovat délku zvuku.** `usage.seconds` v odpovědi je k dispozici;
+   pod ~1,5 s je řeč nepravděpodobná. Levné, ale neřeší delší šum.
+2. **Prahovat na `avg_logprob` / `no_speech_prob`**, pokud je OpenRouter
+   vrací při `response_format=verbose_json`. **Neověřeno** — dnes se
+   `response_format` záměrně neposílá, protože textový režim je napříč
+   poskytovateli nespolehlivý. Tohle by chtělo změřit.
+3. **U `capture` vyžadovat potvrzení**, když text vznikl přepisem hlasu.
+   Nejbezpečnější, ale ubírá na plynulosti právě tam, kde je hlas
+   nejužitečnější.
+4. **Nedělat nic** a spolehnout se, že si uživatel omylem odeslanou
+   hlasovku všimne. Legitimní volba u systému pro jednoho člověka —
+   ale pak by to mělo být rozhodnuté, ne opomenuté.
+
+Souvisí s P4 (fabrikované citace) — tatáž kategorie tichého selhání, jen
+na vstupu místo na výstupu.
+
+---
+
 ## K zamyšlení (nezadané, nezanalyzované — jen nápady)
 
 Volnější sekce než P1–P4: věci, které stojí za zvážení časem, ale ještě
