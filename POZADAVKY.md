@@ -785,7 +785,7 @@ na vstupu místo na výstupu.
 | komponenta | nasazeno | aktuální upstream | |
 |---|---|---|---|
 | pgvector | 0.8.6 | 0.8.6 | aktuální |
-| Infinity | 0.0.77 | 0.0.77 | aktuální, upstream nevydal od 2025-08-22 |
+| Infinity | 0.0.77 | 0.0.77 | aktuální — viz poznámka o upstreamu níž |
 | PostgreSQL | 17.10 | 17.11 | jeden patch |
 | LiteLLM | 1.95.0 | 1.97.0 | dvě minor verze |
 | Python (kryton, retrieval) | 3.13.14 | 3.13.15 | jeden patch |
@@ -836,6 +836,42 @@ chová hůř — dotaz na ghcr.io na něj vrátil 404. Správný zdroj je
   o Prismě jsou interní refaktory a UI. Ale LiteLLM Prisma migrace
   používá, takže **před upgradem zálohovat databázi `litellm`**.
   Upgrade se teď dělá vědomě změnou digestu v `scripts/03-quadlets.sh`.
+
+### Infinity: upstream zpomalil, ale migrace by dnes byla zhoršení
+
+Prověřeno 2026-08-18, protože poslední **release** Infinity je 0.0.77
+z 2025-08-22. Commity ale běžely do **2026-03-24** a repozitář není
+archivovaný — ticho je pět měsíců, ne rok. Za vydáním 0.0.77 leží asi
+sedm měsíců nevydané práce na `main`.
+
+Prověřené alternativy proti dvěma tvrdým omezením (CPU only na
+i7-8550U bez GPU; **dva modely v jednom procesu**, což dělá `Exec=v2`):
+
+| | push | CPU | oba modely v 1 procesu |
+|---|---|---|---|
+| Infinity 0.0.77 | 2026-03-24 | ano | **ano** |
+| TEI | 2026-07-24 | ano | **ne** |
+| llama.cpp | aktivní | nejlépe | **ne** |
+| Xinference | aktivní | ano | ano |
+| LocalAI | aktivní | ano | ano |
+| vLLM | aktivní | prakticky ne | — |
+
+**vLLM vypadává** (postavené na GPU). **TEI a llama.cpp umí jen jeden
+model na instanci**, takže by migrace znamenala dva kontejnery, dvě
+zavedení modelu a dvě paměťové stopy na mobilním i7 — zhoršení, zaplacené
+jen tím, že upstream commituje častěji.
+
+**Rozhodnuto 2026-08-18: nemigrovat.** Infinity funguje, je pinnuté,
+běží na privátní síti nad dvěma pevnými modely a prahy na `rerank_score`
+jsou proti němu změřené (P4, P7-B). Riziko z nečinnosti je hlavně
+„nepodpoří nové modely", což tenhle systém nepotřebuje.
+
+**Správné pořadí, kdyby se k tomu vracelo:** nejdřív doměřit, jestli má
+reranking na SÉMANTICKÝCH dotazech vůbec hodnotu — na lexikálních
+změřeno, že nepřinesl nic. Kdyby se ukázal jako zbytečný, zůstal by
+jediný model, multi-model režim by přestal být potřeba a **TEI by byla
+čistá volba** s aktivním upstreamem. Volba serveru je tedy důsledek
+rozhodnutí o rerankeru, ne samostatná otázka.
 
 ### Zbývá 3: 855 MB nevyužitých image
 
