@@ -775,6 +775,78 @@ na vstupu místo na výstupu.
 
 ---
 
+## P11 — Upgrady komponent a dopinnutí zbylých pohyblivých tagů
+
+**Stav: ZAZNAMENÁNO (2026-08-18).** Vzniklo z kontroly verzí. Naléhavá
+část (pin LiteLLM na digest) je hotová hned, zbytek je práce na příště.
+
+### Naměřený stav k 2026-08-18
+
+| komponenta | nasazeno | aktuální upstream | |
+|---|---|---|---|
+| pgvector | 0.8.6 | 0.8.6 | aktuální |
+| Infinity | 0.0.77 | 0.0.77 | aktuální, upstream nevydal od 2025-08-22 |
+| PostgreSQL | 17.10 | 17.11 | jeden patch |
+| LiteLLM | 1.95.0 | 1.97.0 | dvě minor verze |
+| Python (kryton, retrieval) | 3.13.14 | 3.13.15 | jeden patch |
+
+PostgreSQL 18 existuje (18.6), ale 17 je podporovaná dál. Major upgrade by
+znamenal `pg_upgrade` nad 11 GB volume plus rebuild vlastního image
+s českým hunspellem. **Nedoporučeno**, přínos nulový.
+
+### Co už je hotové (2026-08-18)
+
+- **LiteLLM pinnutý na index digest** místo pohyblivého `:main-stable`.
+  Ověřeno, že se tag posunul: `:main-stable` ukazoval na index
+  `sha256:468c25f3`, brain běžel na `sha256:af806882`. Bez pinu by
+  jakýkoliv `podman pull`, přestavba hostitele nebo obnova ze zálohy
+  skočila na jinou verzi **bez zmeny v repozitáři**.
+- `podman image prune` — 11,87 → 11,43 GB.
+
+### Zbývá 1: dopinnout ostatní pohyblivé tagy
+
+Po LiteLLM zůstávají pohyblivé ještě dva a mají stejné riziko:
+
+| kde | tag | co se stane při rebuildu |
+|---|---|---|
+| `conf/Containerfile.postgres` | `pgvector/pgvector:pg17` | vezme aktuální pgvector i PG minor |
+| `kryton/Containerfile`, `retrieval-service/Containerfile` | `python:3.13-slim` | vezme aktuální patch Pythonu |
+
+U aplikačních image je to méně bolestivé (rebuild je řízený), ale u
+Postgresu to znamená, že **rebuild image může tiše změnit verzi databáze
+i pgvectoru** — a to je horší kategorie než u LiteLLM, protože se to
+dotýká dat.
+
+**Pozor, který digest pinovat.** Dnes jsem na tom najel:
+`podman image inspect --format {{.Digest}}` vrací **platform manifest**
+jedné architektury (u LiteLLM `50e647bd`), který se jako `@sha256:` pin
+chová hůř — dotaz na ghcr.io na něj vrátil 404. Správný zdroj je
+`podman inspect <kontejner> --format {{.ImageDigest}}`, což vrací
+**multi-arch index** (`af806882`). Ověřit lze dotazem na
+`https://ghcr.io/v2/<repo>/manifests/<digest>`: index má
+`mediaType: application/vnd.oci.image.index.v1+json` a seznam dětí.
+
+### Zbývá 2: patch upgrady
+
+- **PostgreSQL 17.10 → 17.11** a **Python 3.13.14 → 3.13.15**. Obojí je
+  rebuild vlastního image plus restart, tedy stejná operace jako běžné
+  nasazení. Nízké riziko.
+- **LiteLLM 1.95.0 → 1.97.0.** Prošel jsem release notes 1.95→1.98-rc
+  a **žádné explicitní varování o breaking migraci tam není** — zmínky
+  o Prismě jsou interní refaktory a UI. Ale LiteLLM Prisma migrace
+  používá, takže **před upgradem zálohovat databázi `litellm`**.
+  Upgrade se teď dělá vědomě změnou digestu v `scripts/03-quadlets.sh`.
+
+### Zbývá 3: 855 MB nevyužitých image
+
+Po `podman image prune` (maže jen dangling) zbývá 855 MB v otagovaných,
+ale nepoužívaných image. `podman image prune -a` by je smazalo, ale sebralo
+by i base image potřebné pro rebuildy (`python:3.13-slim`,
+`pgvector/pgvector:pg17`) — ty by se stáhly znovu. Při 37 GB volných to
+nespěchá.
+
+---
+
 ## K zamyšlení (nezadané, nezanalyzované — jen nápady)
 
 Volnější sekce než P1–P4: věci, které stojí za zvážení časem, ale ještě
