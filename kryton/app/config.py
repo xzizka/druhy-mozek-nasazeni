@@ -11,21 +11,48 @@ MARKDOWN_ROOT = os.environ.get("MARKDOWN_ROOT", "/data/markdown")
 # v litellm-config.yaml, ne v kódu.
 ANSWER_MODEL = os.environ.get("ANSWER_MODEL", "reasoning")
 
-# reasoning je big-pickle, tedy reasoning model: tokeny utrácí na
-# reasoning_content dřív, než začne psát odpověď. Změřeno, že při
-# max_tokens=300 vrátil PRÁZDNÝ content s finish_reason=length.
-# Proto tisíce, ne stovky.
+# Strop na výstupní tokeny pro `reasoning` — a tím i pro celý fallback
+# řetěz za ním, protože hodnota z requestu má přednost před `max_tokens`
+# u aliasu v litellm-config.yaml. Strop tedy určuje TENHLE řádek.
 #
-# ZVÝŠENO 2026-08-09 z 3000 na 8000. Dotaz „udělej sumarizaci knih podle
-# jazyka, kolik je kterých" spotřeboval ve spend logu přesně 3000 výstupních
-# tokenů, tedy celý strop, a vrátil prázdný content. Pro srovnání: běžné
-# dotazy na tomtéž korpusu utratily 202 a 468 tokenů. Agregační otázky nutí
-# reasoning model uvažovat dlouho, protože odpověď z dodaných úryvků složit
-# nejde — na to je stránka /korpus, která bere čísla z databáze.
+# HISTORIE, protože to číslo dvakrát změnilo smysl:
 #
-# Hodnota z requestu má přednost před `max_tokens: 4000` u aliasu reasoning
-# v litellm-config.yaml, takže strop určuje TENHLE řádek, ne LiteLLM.
-ANSWER_MAX_TOKENS = int(os.environ.get("ANSWER_MAX_TOKENS", "8000"))
+# 1) Původně stovky. Big-pickle je reasoning model a tokeny utrácí na
+#    reasoning_content dřív, než začne psát; při max_tokens=300 vrátil
+#    PRÁZDNÝ content s finish_reason=length. Proto tisíce.
+# 2) 2026-08-09 zvýšeno 3000 -> 8000. Dotaz „udělej sumarizaci knih podle
+#    jazyka, kolik je kterých" spotřeboval přesně 3000, tedy celý strop,
+#    a vrátil prázdný content.
+# 3) 2026-08-18 SNÍŽENO 8000 -> 2000, viz níž.
+#
+# SNÍŽENÍ (P8 bod b). Těch 8000 bylo šité na big-pickle, ale aplikovalo se
+# i na fallbacky, které to nepotřebují — a byla to PŘÍMÁ PŘÍČINA incidentu
+# 2026-08-17: po vyčerpání kvóty big-pickle dostala gemma 8000 tokenů
+# volnosti, na které stavěná není, mlela 743 s, vyrobila 24 000 znaků
+# a výsledek se uložil do cache. Do Telegramu pak přišlo šest zpráv za
+# sebou. Oprava (c) — posílání deadlinu v těle requestu — škodu jen
+# zmenšila; tenhle řádek ji ruší.
+#
+# Snížit šlo teprve po kroku 2, kdy `reasoning` přešel z big-pickle na
+# `openai/gpt-oss-120b`, který má řádově menší apetit na uvažování.
+# Změřeno 2026-08-18 skriptem `scripts/26-eval-answer-max-tokens.py`,
+# 11 volání přes obě cesty, které tenhle strop používají:
+#
+#   odpověď nad úryvky (core.py)   6 dotazů, max 534 tokenů celkem
+#   generování SQL (analytics.py)  5 dotazů, max 248 tokenů celkem
+#   z toho na uvažování            median 178, maximum 304
+#   finish_reason=length            0x  (všech 11 skončilo `stop`)
+#
+# Klíčové: i ta agregační otázka z bodu 2), kvůli které se zvyšovalo na
+# 8000, spotřebovala jen 349 tokenů a dokončila se. Důvod pro 8000 tedy
+# zmizel s big-picklem.
+#
+# 2000 je maximum 534 krát skoro čtyři. Rezerva je záměrná — měřená sada
+# nikdy nepokryje všechny budoucí dotazy a tenhle strop je POSLEDNÍ
+# ochrana proti zacyklení, ne cílová hodnota. Vyhovuje všem třem modelům
+# v řetězu: gpt-oss-120b (534), gemma (běžně pod 500) i gpt-oss-20b
+# (uvažování 241-368 v měření z 2026-08-18).
+ANSWER_MAX_TOKENS = int(os.environ.get("ANSWER_MAX_TOKENS", "2000"))
 ANSWER_TIMEOUT = float(os.environ.get("ANSWER_TIMEOUT", "180"))
 
 # O kolik déle než `ANSWER_TIMEOUT` čeká HTTP klient. `ANSWER_TIMEOUT` se

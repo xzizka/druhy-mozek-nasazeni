@@ -5,7 +5,7 @@ Sesterský skript k `22-eval-nexos-models.py`, ale MĚŘÍ NĚCO JINÉHO.
 `22` testuje roli `cheap`: krátké prompty, `max_tokens` 20 a 120 —
 a na těch reasoning modely selhávají tím, že spotřebují strop na úvahu
 a vrátí prázdný `content`. Role `reasoning` je opak: Kryton posílá
-~2800 tokenů kontextu a `ANSWER_MAX_TOKENS=8000`, kde na úvahu místo je.
+~2800 tokenů kontextu a velký strop na výstup, kde na úvahu místo je.
 
 Testuje se to, na čem u Krytona záleží:
 
@@ -115,7 +115,10 @@ OTAZKY = [
      "priznat_nevim", []),
 ]
 
-MAX_TOKENS = 8000        # jako ANSWER_MAX_TOKENS u Krytona
+# Zamerne vysoko. Kryton posilal 8000 v dobe tohohle mereni; krok 3
+# (2026-08-18) to snizil na 2000, ale MERIT se ma s volnym stropem, jinak
+# se nezmeri, kolik si model vezme. Viz `26-eval-answer-max-tokens.py`.
+MAX_TOKENS = 8000
 TIMEOUT = 180            # jako ANSWER_TIMEOUT
 
 
