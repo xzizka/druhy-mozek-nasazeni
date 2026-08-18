@@ -500,8 +500,10 @@ vůči `MemoryMax=800M`, nezvyšováno preventivně.
 
 ## P6 — Fallback řetěz `reasoning` může spadnout celý najednou
 
-**Stav: ZAZNAMENÁNO (2026-08-12).** Nalezeno vyšetřením reálného selhání
-v Telegramu, ne zadáno dopředu. Časem k řešení.
+**Stav: PŮVODNÍ PŘÍČINA ODSTRANĚNA (2026-08-18), ZBYTKOVÉ RIZIKO ZŮSTÁVÁ.**
+Nalezeno vyšetřením reálného selhání v Telegramu 2026-08-12. **Celý oddíl
+níž popisuje sestavu, která už neexistuje** — čti ho jako historii
+a aktuální stav najdeš v „Co s tím udělalo 2026-08-18" na konci.
 
 ### Co se stalo
 
@@ -555,7 +557,56 @@ stihnou přečkat — to by řešilo jen doplnění dalšího, nezávislého
 poskytovatele do `backstop`ova fallbacku, což dnešní návrh záměrně nemá
 (řetěz `reasoning` u `backstop` končí).
 
-Souvisí: [[cheap-alias-denni-limit]].
+### Co s tím udělalo 2026-08-18
+
+Optimalizace modelů (kroky 1–3) odstranila **příčinu tohoto konkrétního
+incidentu**, i když to nebyl její cíl:
+
+| článek řetězu | 2026-08-12 | dnes |
+|---|---|---|
+| `reasoning` | `big-pickle` / OpenCode Zen, free preview, **vlastní účtový rate limit** | `openai/gpt-oss-120b`, placený, routing pinnutý na DeepInfra |
+| `workhorse` | `gemma-4-26b-a4b-it:free` | **týž model bez `:free`**, placený |
+| `backstop` | `gpt-oss-20b:free` | **týž model bez `:free`**, placený |
+
+Sled z incidentu — tři poskytovatelé na free tieru zahlcení ve stejnou
+chvíli — **v této podobě nastat nemůže**, protože žádný článek řetězu už
+na free tieru není.
+
+### ALE: jeden předpoklad tohoto oddílu je vyvrácený
+
+Výše se píše, že `upstream_provider_shared_pool` je „sdílený fond
+**zdarma**". **Není to tak.** 2026-08-18 dostal tentýž typ 429
+`inclusionai/ling-2.6-flash` — model, který je v konfiguraci **placený**
+(0,010/0,030 $/M) — od poskytovatele Novita:
+
+    429 "inclusionai/ling-2.6-flash is temporarily rate-limited upstream"
+    limit_source: upstream_provider_shared_pool
+
+Placený tarif tedy tuhle třídu selhání **neobchází**, jen zřejmě snižuje
+jeho frekvenci. Zapsáno samostatně jako **P9**, protože se projevuje jinde
+(alias `cheap`, horká cesta hledání) a má jiné řešení.
+
+### Zbytkové riziko, kvůli kterému P6 nezavírám
+
+1. **Krátkodobé 429 od poskytovatele existují i u placených modelů** —
+   viz výše. `num_retries: 3` u `workhorse` a `backstop` zůstává jediná
+   ochrana a platí i dnešní tradeoff (delší čekání u Telegramu).
+2. **`reasoning` má nově vnitřní zúžení.** Routing je omezený na
+   `order: [DeepInfra, Mancer 2, BaseTen]` s `allow_fallbacks: false`,
+   takže když padnou tihle tři, OpenRouter nezkusí zbylých sedmnáct
+   poskytovatelů `gpt-oss-120b` a chyba propadne na `workhorse`. Je to
+   vědomé — bez toho by routing sáhl na poskytovatele s mediánem 16–39 s
+   (viz měření v `scripts/25-eval-or-routing.py`) — ale je to nová
+   podmínka, kterou původní analýza P6 nezná.
+3. **Původní návrh na doplnění nezávislého poskytovatele do
+   `backstop`ova fallbacku pořád není realizovaný** a pořád by to byla
+   jediná skutečná obrana proti korelovanému výpadku.
+
+**K rozhodnutí:** buď P6 přepsat na užší zadání („chránit řetěz proti
+korelovaným 429 u placených modelů"), nebo zavřít a nechat riziko
+pokryté P9. Zatím ponecháno otevřené.
+
+Souvisí: [[cheap-alias-denni-limit]], P9, P8.
 
 ---
 
@@ -650,6 +701,95 @@ neprovedeno.
 
 **Mimochodem:** odpovídal `workhorse` (gemma), ne `reasoning` — tedy
 `reasoning` propadl fallbackem, viz P6.
+
+---
+
+## P8 — Vyčerpaná kvóta big-pickle způsobila čtyři dny tiché degradace a šest zpráv nesmyslu
+
+**Stav: PŘÍČINA ODSTRANĚNA (2026-08-18), BOD (d) OTEVŘENÝ.** Nalezeno
+2026-08-17 vyšetřením „hrozných nesmyslů" v Telegramu, které uživatel
+nahlásil jako podezření na hacknutý systém. **Hack to nebyl.**
+
+Zapsáno do `POZADAVKY.md` až 2026-08-18 — dosud existovalo jen v poznámkách
+mimo repozitář, což byla mezera: nejzávažnější incident projektu nebyl
+v dokumentaci, kterou si člověk přečte.
+
+### Kořen
+
+`reasoning` (`openai/big-pickle` přes OpenCode Zen) vracel 429 s typem
+`FreeUsageLimitError` — **vyčerpaná bezplatná kvóta**, ne dočasné zahlcení.
+Poslední úspěšné volání: **2026-08-13 18:09:09**. Mezi 14. a 16. 8. měl
+systém jeden požadavek denně, takže `reasoning` nikdo nevyzkoušel; 17. 8.
+byl první den s reálným provozem a selhalo všech ~34 pokusů.
+
+**Reset nebyl denní.** 17. 8. selhal už první dotaz po čtyřech dnech klidu,
+18. 8. model zase fungoval. Skutečný rozvrh se z dat vyčíst nedal.
+
+### Proč to čtyři dny nikdo neviděl
+
+Když fallback uspěje, LiteLLM zapíše do `LiteLLM_SpendLogs` **jen úspěšný
+model**. Selhaný primární pokus nezanechá řádek. Tichá degradace
+z big-pickle na free gemmu tedy neprodukuje **žádný signál** — ani chybu
+uživateli, ani log, ani spend záznam. Zjistit to jde jen voláním aliasu
+s `"fallbacks": []`, kdy chyba nezmizí.
+
+### Řetěz následků, kvůli kterému se to provalilo
+
+1. kvóta vyčerpaná → všechno odpovídá `gemma-4-26b-a4b-it:free`
+2. Kryton posílá `max_tokens=8000` — hodnotu zvolenou **kvůli big-pickle**
+3. gemma na 8000 tokenů volnosti není stavěná → **zacyklila se**:
+   2726 vstupních / **8000 výstupních tokenů za 743 s**
+4. Kryton se po `ANSWER_TIMEOUT=180` vzdal a poslal „Dotaz selhal: …"
+5. LiteLLM ale mlelo dál a výsledek **uložilo do cache** (TTL 3600)
+6. uživatel dotaz zopakoval → zásah v cache za 0 s → 8000 tokenů
+   ≈ 24 000 znaků → `_send()` je krájí po 4000 → **šest zpráv za sebou**
+
+Ověřeno, že to nezpůsobil blok s datem z P7: tatáž gemma na promptech
+srovnatelné velikosti vracela 29 a 51 tokenů za 4–6 s. 8000 tokenů je
+zároveň první výskyt v historii — do 17. 8. bylo maximum 5 725.
+
+**Bezpečnost prověřena a čistá:** nikdy žádná zpráva od neautorizovaného
+Telegram uživatele, `/mcp` nikdo nezkusil ani jednou, SSH jen publickey
+pro root z 127.0.0.1 jedním klíčem, žádné selhané přihlášení.
+
+### Soukromí, nález z dokumentace 2026-08-18
+
+Big Pickle je „stealth model free for a limited time" a platí u něj, že
+*„collected data may be used to improve the model"*. Obsah poznámek včetně
+deníku tedy mohl sloužit k trénování — což si odporovalo
+s `turn_off_message_logging: true` v `litellm-config.yaml`, kde je vědomě
+napsáno, že „obsah poznámek je jiná kategorie dat".
+
+### Co je opraveno
+
+| | co | kdy |
+|---|---|---|
+| **(c)** | `ANSWER_TIMEOUT` se posílá i **v těle** požadavku jako deadline pro LiteLLM; klient čeká o `ANSWER_TIMEOUT_MARGIN=15` déle | 2026-08-17, `b384b9e` |
+| **(e)** | `telegram.py` už neposílá text výjimky do chatu | 2026-08-17, `b384b9e` |
+| **(f)** | `core.zkontroluj_fallback()` porovná požadovaný alias s polem `model` v odpovědi a při neshodě zaloguje WARNING — tím přestává být propad na fallback neviditelný, což byla vlastní příčina toho, že si toho čtyři dny nikdo nevšiml | 2026-08-18, `0140065` |
+| **(b)** | `ANSWER_MAX_TOKENS` **8000 → 2000**. Přímá příčina zacyklení. Šlo teprve po přechodu `reasoning` na `gpt-oss-120b`; podloženo měřením 11 volání přes `core.py` i `analytics.py`, maximum 534 tokenů, žádné `finish_reason=length` | 2026-08-18, `214fee3` |
+| **kořen** | `reasoning` **opustil big-pickle** — tím padá vyčerpávající se kvóta i trénování na datech | 2026-08-18, `214fee3` |
+
+Pozn. k (f): stojí to na **pozorovaném** chování LiteLLM (při úspěchu
+primárního aliasu vrací jméno aliasu, při propadu konkrétní model), což
+není zaručené dokumentací. Zapsáno v docstringu.
+
+Pozn. k (b): hodnota bydlí v `kryton/app/config.py`, **ne**
+v `litellm-config.yaml` — hodnota z requestu má přednost před `max_tokens`
+u aliasu, takže strop určuje Kryton.
+
+### Otevřené: bod (d)
+
+**Žádná kontrola délky odpovědi před odesláním do Telegramu.** Krok 6
+řetězu výše — krájení na šestici zpráv — dnes zabránit nic nedokáže.
+Opravy (b) a (c) to jen zmenšily: strop 2000 tokenů znamená místo ~24 000
+znaků řádově 6 000, tedy dvě zprávy místo šesti. Ale mechanismus zůstal.
+
+Návrh k rozhodnutí (nezanalyzováno): prahovat délku v `_send()` a při
+překročení poslat zkrácenou odpověď s poznámkou, místo mlčky rozřezaného
+seriálu.
+
+Souvisí: P6, P9, P4.
 
 ---
 
