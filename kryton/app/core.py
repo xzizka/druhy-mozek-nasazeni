@@ -247,6 +247,36 @@ def dost_relevantni(hits: list[dict]) -> list[dict]:
     return out
 
 
+def zkontroluj_fallback(pozadovany: str, vraceny: str) -> bool:
+    """WARNING do logu, když odpověď přišla od jiného modelu, než jsme chtěli.
+
+    LiteLLM při úspěchu primárního aliasu vrací v poli `model` JMÉNO ALIASU
+    (`reasoning`), zatímco po propadu na fallback vrací konkrétní model
+    (`google/gemma-4-26b-a4b-it:free`). Neshoda tedy znamená, že primární
+    model selhal a odpovídal někdo jiný.
+
+    PROČ TO VŮBEC JE (P8, 2026-08-17): big-pickle měl od 13. 8. vyčerpanou
+    free kvótu a všechno tiše odpovídala `gemma:free`. Nikde to nebylo vidět
+    — LiteLLM zapíše do spend logu JEN úspěšný fallback, selhaný primární
+    pokus nezanechá řádek, a uživatel nedostane žádnou chybu. Trvalo čtyři
+    dny, než se to provalilo, a to až nepřímo: gemma dostala `max_tokens`
+    kalibrované pro big-pickle, zacyklila se na 8000 tokenů a do Telegramu
+    přišlo 24 000 znaků nesmyslu.
+
+    Tichý propad kvality je horší než hlasitá chyba — proto WARNING.
+
+    POZOR: tohle chování LiteLLM je POZOROVANÉ (třikrát, 2026-08-17/18), ne
+    zaručené dokumentací. Kdyby začal vracet konkrétní model i u primárního,
+    hlásilo by to propad pokaždé — otravné, ale neškodné a snadno poznatelné.
+    """
+    if not vraceny or vraceny == pozadovany:
+        return False
+    log.warning("model se propadl na fallback: chtel jsem %r, odpovedel %r "
+                "(nejcasteji vycerpana kvota primarniho modelu, viz P8)",
+                pozadovany, vraceny)
+    return True
+
+
 def answer(query: str, hits: list[dict], prior: list[dict] | None = None,
            extra: str = "") -> tuple[str, str, int]:
     """Vrátí (odpověď, model, latence_ms).
@@ -298,6 +328,7 @@ def answer(query: str, hits: list[dict], prior: list[dict] | None = None,
     if r.status_code != 200:
         raise RuntimeError(f"LiteLLM {r.status_code}: {r.text[:200]}")
     d = r.json()
+    zkontroluj_fallback(config.ANSWER_MODEL, d.get("model") or "")
     msg = d["choices"][0]["message"]
     text = (msg.get("content") or "").strip()
     if not text:
