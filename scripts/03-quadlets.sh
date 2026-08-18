@@ -240,15 +240,24 @@ IP=10.89.7.12
 # breaking". Tag :main-stable tu vetu porusoval, jen mene okate nez
 # :main-latest.
 #
-# Overeno 2026-08-18 proti registru: brain bezel sha256:50e647bd (LiteLLM
-# 1.95.0), zatimco :main-stable uz ukazoval na sha256:468c25f3. Jakykoliv
-# "podman pull", prestavba hostitele nebo obnova ze zalohy by tedy skocila
-# na jinou verzi BEZ jakekoliv zmeny v repozitari — tichy posun stejne
-# kategorie jako nesynchronizovany symlink z 2026-08-13.
+# Overeno 2026-08-18 proti ghcr.io: :main-stable ukazoval na index
+# sha256:468c25f3 (amd64 dite 4bc4fe17), zatimco brain bezel na indexu
+# sha256:af806882 (amd64 dite 50e647bd) s LiteLLM 1.95.0. Tag se tedy
+# posunul a jakykoliv "podman pull", prestavba hostitele nebo obnova ze
+# zalohy by skocila na jinou verzi BEZ zmeny v repozitari — tichy posun
+# stejne kategorie jako nesynchronizovany symlink z 2026-08-13.
 #
 # Digest, ne verzovany tag, protoze verzovane stable tagy (v1.97.0-stable
 # apod.) v registru NEEXISTUJI — overeno vylistovanim tagu z ghcr.io.
-# Digest je navic imutabilni z definice.
+#
+# POZOR, KTERY DIGEST: pinuje se INDEX (multi-arch), ne jeho dite.
+# "podman image inspect --format {{.Digest}}" vraci PLATFORM manifest te
+# jedne architektury, tedy 50e647bd — ten se jako @sha256: pin chova hure
+# (na ghcr.io na nej dotaz vratil 404) a je vazany na amd64. Spravny zdroj
+# je "podman inspect <kontejner> --format {{.ImageDigest}}", ktery vraci
+# index af806882. Overit lze dotazem na
+# https://ghcr.io/v2/berriai/litellm/manifests/<digest> — index vraci
+# mediaType application/vnd.oci.image.index.v1+json a seznam deti.
 #
 # UPGRADE se ted dela vedome: zmen digest tady, zaloz databazi litellm
 # (Prisma migrace) a nasad. Aktualni upstream k 2026-08-18 je 1.97.0.
@@ -258,9 +267,8 @@ IP=10.89.7.12
 # komentare se zpetne apostrofy kolem jmen tagu vyhodnotily jako prikazy —
 # do logu spadlo sest "command not found" a jeden "podman pull" se skutecne
 # spustil (nastesti bez argumentu, takze jen zahlasil chybu). V komentarich
-# uvnitr heredocu proto NEPOUZIVEJ zpetne apostrofy ani $; bez escapovani
-# to spousti prikazy pri kazdem nasazeni.
-Image=ghcr.io/berriai/litellm@sha256:50e647bd5ee32010317378335d5830dbbcd793b4dd1a9a4460bd34a9272cda95
+# uvnitr heredocu proto NEPOUZIVEJ zpetne apostrofy ani $.
+Image=ghcr.io/berriai/litellm@sha256:af806882b7a6ced41658db5b6a7e98ed7b9b51d03b935e0417bf1c8552d688af
 Network=brain.network
 # ZMENA proti navrhu: publikovano na homelab LAN i Tailscale (bind 0.0.0.0).
 # Chraneno master key / virtual keys.
