@@ -1095,6 +1095,59 @@ nespěchá.
 
 ---
 
+## P12 — Přeměřit rerank, až bude korpus větší (nejpozději 2026-10-19)
+
+**Stav: SCHVÁLENO (2026-08-19), čeká na podmínku.** Zadáno spolu se
+snížením `RERANK_TOP_K` na 10.
+
+### Co se rozhodlo a na základě čeho
+
+`scripts/28-rerank-value-denik.py` — 14 přirozených otázek nad skutečným
+deníkem (10 záznamů 08-10 až 08-18 plus nahraná žádost zastupitelstvu),
+párově, se shodnými `keywords` i `lang` v obou ramenech.
+
+| konfigurace | top-1 | cíl v top-8 | medián |
+|---|---|---|---|
+| bez reranku | 13/14 | 14/14 | 0,13 s |
+| `rerank_top_k=10` | 14/14 | 14/14 | 3,95 s |
+| `rerank_top_k=20` | 14/14 | 14/14 | 10,36 s |
+
+`RERANK_TOP_K` snížen z 20 na **10**: identická kvalita za třetinu času.
+Rerank se nevypnul, protože ten jediný dotaz, kde něco přidal, rozlišoval
+záznam o **istio** (08-13) od záznamu o **network policy pro Kubernetes
+1.36** (08-18) — typ dotazu, kterých nad deníkem přibude.
+
+### Proč to není hotová věc
+
+**Baseline je u stropu (13/14).** Je to tatáž vada, jakou mělo měření
+z 2026-08-10 (44/47): nad čtrnácti dokumenty najde RRF fúze správný
+dokument skoro vždycky a rerank může jen přerovnávat remízy. Měření tedy
+neprokázalo, že rerank pomáhá — jen že za `top_k=10` neškodí.
+
+**A snížení má cenu, kterou tohle měření vidět nemůže.** `main.py` počítá
+`fetch = max(top_k, limit)`, takže při `RESULT_LIMIT=8` se rerankuje deset
+kandidátů a dokument na RRF pozici 11–20 se už nahoru dostat nemůže. Nad
+14 dokumenty to nevadilo, protože cíl byl vždy v top-8 už podle RRF. Nad
+větším korpusem vadit může, a projeví se to tiše — jako odpověď, která
+prostě neví.
+
+### Co udělat
+
+Spustit `scripts/28-rerank-value-denik.py` znovu, **až bude korpus výrazně
+větší**, nejpozději **2026-10-19**. Skript je hotový a opakovatelný; sadu
+otázek rozšířit o nové záznamy, aby baseline nezůstala u stropu.
+
+Porovnat `bez reranku` / `10` / `20` a rozhodnout znovu. Připomenout, že
+latence v tabulce výš je režim „krátké poznámky" — deníkové záznamy jsou
+jedna až tři věty. Až budou chunky plné (~1200 znaků), platí čísla
+z `PIPELINE.md`: `top_k=20` je ~22 s, `10` ~10 s. Cenu řídí objem textu,
+ne počet kandidátů (přeověřeno 2026-08-19 na Infinity: 20× 75 znaků
+= 2,12 s, 20× 1218 znaků = 23,63 s).
+
+Souvisí: P11, PIPELINE.md „Rerank — regulátor latence".
+
+---
+
 ## K zamyšlení (nezadané, nezanalyzované — jen nápady)
 
 Volnější sekce než P1–P4: věci, které stojí za zvážení časem, ale ještě

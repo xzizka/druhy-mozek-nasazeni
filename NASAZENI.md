@@ -625,8 +625,8 @@ odhalila, jsou body 6 a 7 výš.
    `core.capture()` frontmatter `lang:`; odpověď pak nese `lang_source:
    "request"`. Neznámý kód vrací 422.
 2. ~~Zvážit výměnu rerankeru za `bge-reranker-v2-m3`~~ — hotovo a změřeno,
-   top-1 přesnost 57 % → 100 %. **`RERANK_TOP_K` zůstává nerozhodnutý a po
-   zátěžovém testu je to naléhavější, ne méně.** Čísla, se kterými se
+   top-1 přesnost 57 % → 100 %. **`RERANK_TOP_K` byl nerozhodnutý až do
+   2026-08-19; dnes je 10, viz vyřešení na konci tohoto bodu.** Čísla, se kterými se
    rozhodovalo dřív (20 → 3,8 s, 10 → 2,0 s), platila nad krátkými testovacími
    poznámkami. Nad plným indexem stojí dnešní nastavení `RERANK_TOP_K=20`
    **26,15 s na dotaz**, `10` je 13,24 s a bez reranku 2,30 s — cena se totiž
@@ -681,9 +681,25 @@ odhalila, jsou body 6 a 7 výš.
 
    Rozhodne až sada přirozených otázek s known-good dokumentem. Nad korpusem
    beletrie se nevyrobí dobře — je to další důvod, proč je nejcennější věcí
-   dostat do systému skutečné poznámky. **Do té doby nesnižovat `RERANK_TOP_K`
-   naslepo**; co je změřené, platí o lexikálních dotazech, ne o těch, které
-   do Krytona chodí.
+   dostat do systému skutečné poznámky.
+
+   **VYŘEŠENO 2026-08-19.** Skutečné poznámky v systému jsou (10 deníkových
+   záznamů) a sada vznikla: `scripts/28-rerank-value-denik.py`, 14 přirozených
+   otázek, párově, se shodnými `keywords` i `lang` v obou ramenech. Výsledek:
+   bez reranku 13/14 top-1 za 0,13 s, `top_k=10` i `top_k=20` shodně 14/14
+   za 3,95 s resp. 10,36 s. Rerank zlepšil jediný dotaz ze čtrnácti a žádný
+   nezhoršil (znaménkový test p = 1,0).
+
+   **`RERANK_TOP_K` snížen na 10** — ne naslepo, ale proto, že kvalita vyšla
+   identická za třetinu času, a ten jediný zisk vznikl přerovnáním uvnitř
+   vrácené osmičky (cíl byl na RRF pozici 2), což `top_k=10` umí dál.
+   Rerank se nevypíná: ten jeden dotaz rozlišoval **istio** od **Kubernetes
+   1.36**, a takových nad deníkem přibude.
+
+   Pozor na to, co tím rozhodnuté NENÍ: baseline 13/14 je **u stropu**, tedy
+   tatáž vada, jakou mělo měření nad zátěžovým korpusem (44/47). Nad čtrnácti
+   dokumenty najde RRF správný dokument skoro vždy. Přeměřit, až korpus
+   poroste — vedeno jako **P12 v `POZADAVKY.md`, nejpozději 2026-10-19**.
 3. ~~Dodat skutečné OpenRouter a bigpickle klíče~~ — hotovo, ověřeno.
 4. ~~Vícejazyčnost (cs, en, de, la)~~ — hotovo a ověřené na čtyřech poznámkách,
    viz `PIPELINE.md` a `scripts/09-multilang-test.py`.

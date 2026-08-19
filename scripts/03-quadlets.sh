@@ -363,10 +363,25 @@ Environment=EMBEDDING_MODEL=bge-m3
 # ZMENA: puvodne bge-reranker-base. Musi odpovidat --served-model-name
 # v infinity.container, jinak retrieval dostane 404 na neznamy model.
 Environment=RERANK_MODEL=bge-reranker-v2-m3
-# Retrieval fáze: 60 kandidátů z RRF, rerank top-20, vrať top-8.
-# Rerank na CPU je nejdražší krok, proto 20 a ne 50.
+# Retrieval fáze: 60 kandidátů z RRF, rerank top-10, vrať top-8.
+# Rerank na CPU je nejdražší krok, proto 10 a ne 50.
+#
+# ZMENA 2026-08-19: z 20 na 10, na základě scripts/28-rerank-value-denik.py
+# (14 přirozených otázek nad skutečným deníkem, párově). Kvalita vyšla
+# IDENTICKÁ — 14/14 top-1 při top_k=10 i 20 — za třetinu času: medián
+# 3,95 s proti 10,36 s. Jediný dotaz, kde rerank vůbec něco přidal
+# (rozlišení istio od Kubernetes 1.36), měl cíl na RRF pozici 2, takže
+# zisk vznikl PŘEROVNÁNÍM uvnitř vrácené osmičky, ne vytažením dokumentu
+# z hloubky — a to `top_k=10` umí dál.
+#
+# Co se tím obětuje: `main.py` počítá `fetch = max(top_k, limit)`, takže
+# při RESULT_LIMIT=8 se rerankuje 10 kandidátů a dokument na RRF pozici
+# 11-20 se už nahoru dostat nemůže. Nad 14 dokumenty to nevadilo (cíl byl
+# vždy v top-8 už podle RRF), nad větším korpusem vadit může.
+# Proto P12 v POZADAVKY.md: přeměřit, až korpus poroste, nejpozději
+# 2026-10-19.
 Environment=RRF_CANDIDATES=60
-Environment=RERANK_TOP_K=20
+Environment=RERANK_TOP_K=10
 # Prepis dotazu na klicova slova pres LiteLLM alias \`cheap\`. Navrh to
 # zamyslel - litellm-config.yaml ma na konci prikladovy virtual key
 # s "models":["cheap"] prave pro retrieval-service. Veta v README o tom,
