@@ -77,11 +77,58 @@ def _call(method: str, http_timeout: float = 15, **params) -> dict:
     return d["result"]
 
 
+def _zkrat(text: str, limit: int) -> str:
+    """Usekne text tak, aby se i s poznámkou o zkrácení vešel do `limit`.
+
+    Řeže na hranici slova, ale jen když ta hranice leží v poslední pětině
+    povoleného úseku. U textu bez mezer (jedno dlouhé slovo, base64, kus
+    JSONu) by hledání mezery uřízlo skoro všechno, a to je horší než
+    useknout uprostřed slova.
+    """
+    poznamka = "\n\n⚠️ Zkráceno z %d znaků. Celá odpověď je v logu Krytona." % len(text)
+    telo = limit - len(poznamka)
+    if telo <= 0:
+        # Limit menší než samotná poznámka — pak nemá smysl nic vysvětlovat.
+        return text[:limit]
+    usek = text[:telo]
+    mezera = max(usek.rfind(" "), usek.rfind("\n"))
+    if mezera >= telo * 0.8:
+        usek = usek[:mezera]
+    return usek.rstrip() + poznamka
+
+
 def _send(chat_id: int, text: str) -> None:
-    # Telegram limit je 4096 znaků na zprávu; oříznutí na kusy je bezpečnější
-    # než tvrdý pád na delší odpověď.
-    for i in range(0, len(text), 4000):
-        _call("sendMessage", chat_id=chat_id, text=text[i:i + 4000] or "(prázdná odpověď)")
+    """Pošle PRÁVĚ JEDNU zprávu, nikdy seriál (P8 bod d).
+
+    Dřív se text krájel po 4000 znacích ve `for` cyklu. Zacyklená odpověď
+    z 2026-08-17 (~24 000 znaků) tak dorazila jako šest zpráv za sebou,
+    mlčky — uživatel nedostal žádný signál, že je něco špatně. Je to tatáž
+    kategorie jako „věrohodný nesmysl je horší než přiznané selhání", na
+    které v tomhle projektu stojí rozhodnutí o fallbacích.
+
+    **Při zkrácení se celá odpověď LOGUJE.** V Telegramu se nedohledá nic:
+    `telegram.py` nepíše do `conversation` ani `message`, takže bez logu by
+    useknutá část zmizela nadobro. Strop 1024 znaků je přísnější než
+    pozorované maximum odpovědi (595), takže se to spustí i na delší
+    legitimní odpovědi, ne jen na anomálie — o to víc na tom logu záleží.
+
+    Prázdný text posílá `(prázdná odpověď)`. Dřív se pro něj neprovedl ani
+    jeden průchod cyklem (`range(0, 0, 4000)` je prázdný rozsah), takže
+    `or "(prázdná odpověď)"` uvnitř byl mrtvý kód a uživatel dostal ticho —
+    nerozeznatelné od nefunkčního bota. Prázdná odpověď přitom reálně
+    nastává, viz P1: model spotřebuje celý strop na uvažování a vrátí
+    prázdný content.
+    """
+    if not text.strip():
+        _call("sendMessage", chat_id=chat_id, text="(prázdná odpověď)")
+        return
+    limit = config.TELEGRAM_MAX_ZNAKU
+    if len(text) <= limit:
+        _call("sendMessage", chat_id=chat_id, text=text)
+        return
+    log.warning("telegram: odpoved %d znaku presahla limit %d, zkracuji; "
+                "cela odpoved: %s", len(text), limit, text)
+    _call("sendMessage", chat_id=chat_id, text=_zkrat(text, limit))
 
 
 def _je_odpoved_na_bota(msg: dict) -> bool:

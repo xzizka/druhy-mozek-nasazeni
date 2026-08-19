@@ -778,7 +778,7 @@ neprovedeno.
 
 ## P8 — Vyčerpaná kvóta big-pickle způsobila čtyři dny tiché degradace a šest zpráv nesmyslu
 
-**Stav: PŘÍČINA ODSTRANĚNA (2026-08-18), BOD (d) OTEVŘENÝ.** Nalezeno
+**Stav: PŘÍČINA ODSTRANĚNA (2026-08-18), BOD (d) ANALYZOVÁNO (2026-08-19).** Nalezeno
 2026-08-17 vyšetřením „hrozných nesmyslů" v Telegramu, které uživatel
 nahlásil jako podezření na hacknutý systém. **Hack to nebyl.**
 
@@ -857,9 +857,58 @@ u aliasu, takže strop určuje Kryton.
 Opravy (b) a (c) to jen zmenšily: strop 2000 tokenů znamená místo ~24 000
 znaků řádově 6 000, tedy dvě zprávy místo šesti. Ale mechanismus zůstal.
 
-Návrh k rozhodnutí (nezanalyzováno): prahovat délku v `_send()` a při
-překročení poslat zkrácenou odpověď s poznámkou, místo mlčky rozřezaného
-seriálu.
+#### Analýza 2026-08-19
+
+**Kolik místa mezi normálním a patologickým je.** Skutečné odpovědi
+uložené v `message` mají 130, 200, 483 a **595 znaků**; měření k opravě (b)
+dalo maximum **534 tokenů** z 11 volání. Patologický případ měl ~24 000
+znaků. Mezi tím, co systém běžně vyprodukuje, a tím, co selhalo, jsou tedy
+**dva řády**. Práh se dá položit tak, že na normální provoz nesáhne.
+
+**Práh = jedna telegramová zpráva (4096 znaků).** Je to 7× nad nejdelší
+pozorovanou skutečnou odpovědí a zároveň to dělá z „odpověď je vždycky
+jedna zpráva" invariant, který jde zkontrolovat pohledem. Dnešní `_send()`
+krájí po 4000 znacích ve `for` cyklu; s prahem cyklus úplně zmizí.
+
+**`_send()` je správné místo, i když je to sdílená primitiva.** Ověřeno,
+že ze sedmi volajících posílá dlouhý text **jediný** — `odpoved`
+z `core.answer()` na řádku 171. Zbytek jsou pevné krátké věty
+(„Zaznamenáno: …", chybové hlášky, otázka dne). Práh v `_send()` tedy
+nikomu jinému nevadí a chová se jako backstop i pro budoucí volající.
+
+**Zkrácení ale ZTRÁCÍ DATA, a to návrh neřešil.** `telegram.py` nepíše do
+`conversation` ani `message` — ověřeno, žádné volání `db.` tam není.
+Odpověď poslaná do Telegramu tedy neexistuje nikde jinde. Kdyby se
+useklo mlčky, chybějící část je pryč. Proto k prahu **patří
+`log.warning` s celou odpovědí**, jinak se jen vymění jeden tichý problém
+za druhý.
+
+**Nález při čtení kódu: prázdná odpověď dnes neodešle NIC.**
+`for i in range(0, len(text), 4000)` je pro prázdný text prázdný rozsah,
+takže se tělo cyklu neprovede a `or "(prázdná odpověď)"` uvnitř je **mrtvý
+kód** — ověřeno. Prázdná odpověď přitom není hypotetická: přesně tak se
+2026-08-09 projevil dotaz z P1, kde model spotřeboval celý strop na
+uvažování a vrátil prázdný obsah. Uživatel v takovém případě dostane
+ticho, což je nerozeznatelné od nefunkčního bota.
+
+**Co práh NEŘEŠÍ.** Krok 5 řetězu — LiteLLM si zacyklený výsledek uloží do
+cache na hodinu, takže zopakovaný dotaz ho vrátí za 0 s — zůstává. Bod (d)
+je vědomě mitigace symptomu na výstupu; kořen padl s (b) a s odchodem
+`reasoning` z big-pickle.
+
+#### Návrh k rozhodnutí
+
+`_send()` přepsat na tři větve, cyklus zrušit:
+
+1. prázdný text → poslat `(prázdná odpověď)` (oprava mrtvého kódu);
+2. do 4096 znaků → poslat beze změny (tj. veškerý dnešní provoz);
+3. přes 4096 → `log.warning` s celou odpovědí, useknout na hranici slova
+   a připojit poznámku, že odpověď byla neobvykle dlouhá a je zkrácená.
+
+Otevřená volba je jen tvar bodu 3: **useknout na jednu zprávu** (doporučuji
+— pozorované maximum je 595 znaků, takže se to spustí jen při anomálii),
+nebo **povolit dvě zprávy a useknout až pak** (mírnější, ale seriál dvou
+zpráv zůstává normálem).
 
 Souvisí: P6, P9, P4.
 

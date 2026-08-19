@@ -182,6 +182,22 @@ TELEGRAM_ALLOWED_USER_ID = int(os.environ.get("TELEGRAM_ALLOWED_USER_ID", "0"))
 # prázdnou odpověď. HTTP timeout na klientovi musí být delší (viz telegram.py).
 TELEGRAM_POLL_TIMEOUT = int(os.environ.get("TELEGRAM_POLL_TIMEOUT", "30"))
 
+# P8 bod (d): strop na délku JEDNÉ odeslané zprávy. Dřív `_send()` krájel
+# text po 4000 znacích ve smyčce, takže zacyklená odpověď z 2026-08-17
+# (~24 000 znaků) dorazila jako šest zpráv za sebou — mlčky, bez signálu,
+# že je něco špatně.
+#
+# 1024 je volba uživatele (2026-08-19), ne odvozená z měření. Pro srovnání:
+# skutečné odpovědi v tabulce `message` mají 130-595 znaků a strop
+# ANSWER_MAX_TOKENS=2000 pustí řádově 6000. Práh tedy NENÍ jen pojistka
+# proti anomálii — u delších legitimních odpovědí se zkrácení projeví taky.
+# Proto `_send()` celou odpověď loguje: v Telegramu se nic nedohledá,
+# `telegram.py` do DB nepíše.
+#
+# Telegram sám povoluje 4096 znaků na zprávu; tenhle strop je přísnější
+# a s tím API limitem nesouvisí.
+TELEGRAM_MAX_ZNAKU = int(os.environ.get("TELEGRAM_MAX_ZNAKU", "1024"))
+
 # Krok 2: denní otázka. UTC, ne lokální čas — brain běží v UTC, jako
 # všechno ostatní v tomhle projektu (viz kryton-backup.timer). 18 UTC =
 # 20:00 letního času (CEST). POZOR: neni DST-aware, v zime (CET, UTC+1)
