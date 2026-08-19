@@ -253,6 +253,44 @@ Bez reranku je dotaz 0,15 s. Rozdíl mezi 0,15 s a 22 s je tak velký, že
 stojí za změření, jestli reranking nad RRF fúzí vůbec přidává kvalitu —
 `scripts/06-eval-reranker.py` na to je, ale měřil zase jen krátké dokumenty.
 
+### Kvalita: změřeno 2026-08-19 nad skutečnými poznámkami — nerozhodnuto
+
+Otázka z předchozího odstavce má konečně měření nad tím, k čemu systém
+slouží: `scripts/28-rerank-value-denik.py`, 14 přirozených otázek nad
+deníkem (10 záznamů 08-10 až 08-18 plus nahraná žádost zastupitelstvu),
+párově, se **shodnými `keywords` i `lang` v obou ramenech** — přepis přes
+`cheap` proběhne jednou předem, takže se neměří rozptyl LLM ani jeho
+hodinová cache.
+
+| konfigurace | top-1 | cíl v top-8 | medián |
+|---|---|---|---|
+| bez reranku | 13/14 | 14/14 | **0,13 s** |
+| `rerank_top_k=10` | 14/14 | 14/14 | 3,95 s |
+| `rerank_top_k=20` | 14/14 | 14/14 | 10,36 s |
+
+Rerank zlepšil **jediný dotaz ze čtrnácti** a žádný nezhoršil (znaménkový
+test p = 1,0, jedna neshodná dvojice). Ten jeden je ale přesně ten typ,
+kvůli kterému se cross-encoder nasazuje: „Kvůli které komponentě byly
+špatně nastavené síťové politiky?" musí rozlišit záznam o **istio**
+(08-13) od záznamu o **network policy pro Kubernetes 1.36** (08-18).
+Lexikálně vyhrává 08-18, správně je 08-13, a rerank ho posunul z 2. na
+1. místo. `rerank_top_k=10` dal identický výsledek za třetinu času.
+
+**Nerozhodnuto to je proto, že baseline je u stropu** — stejná vada, jakou
+měl rozbor v `16-rerank-value.py` (44/47). Nad čtrnácti dokumenty najde
+RRF fúze správný dokument skoro vždycky a rerank už může jen jinak
+rozhodovat remízy. Měření tedy **neospravedlňuje vypnutí** a zároveň
+neospravedlňuje ani ponechání `RERANK_TOP_K=20`. Zopakovat, až korpus
+poroste.
+
+**Pozor na čtení latencí v téhle tabulce:** deníkové záznamy jsou jedna až
+tři věty, takže jde o režim „krátké poznámky", ne o sloupec „reálné
+chunky". Dnešních 10 s vzniká tím, že se do kandidátů pokaždé dostane
+nahraná žádost — jediný dokument s plnými ~1200 znaky na chunk. Ověřeno
+přímo na Infinity: 20× 75 znaků = **2,12 s**, 20× 1218 znaků = **23,63 s**.
+Pravidlo „cenu řídí objem textu, ne počet kandidátů" tím platí dál a beze
+změny; až budou chunky plné, je `RERANK_TOP_K=20` zase těch ~22 s.
+
 ## Kontrakt služby
 
 Z `retrieval.container`, plus změna DSN pro Python:
