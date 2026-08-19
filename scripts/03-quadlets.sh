@@ -372,9 +372,9 @@ Environment=RERANK_MODEL=bge-reranker-v2-m3
 # 3,95 s proti 10,36 s. Jediný dotaz, kde rerank vůbec něco přidal
 # (rozlišení istio od Kubernetes 1.36), měl cíl na RRF pozici 2, takže
 # zisk vznikl PŘEROVNÁNÍM uvnitř vrácené osmičky, ne vytažením dokumentu
-# z hloubky — a to `top_k=10` umí dál.
+# z hloubky — a to top_k=10 umí dál.
 #
-# Co se tím obětuje: `main.py` počítá `fetch = max(top_k, limit)`, takže
+# Co se tím obětuje: main.py počítá fetch = max(top_k, limit), takže
 # při RESULT_LIMIT=8 se rerankuje 10 kandidátů a dokument na RRF pozici
 # 11-20 se už nahoru dostat nemůže. Nad 14 dokumenty to nevadilo (cíl byl
 # vždy v top-8 už podle RRF), nad větším korpusem vadit může.
