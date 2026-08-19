@@ -778,7 +778,8 @@ neprovedeno.
 
 ## P8 — Vyčerpaná kvóta big-pickle způsobila čtyři dny tiché degradace a šest zpráv nesmyslu
 
-**Stav: PŘÍČINA ODSTRANĚNA (2026-08-18), BOD (d) ANALYZOVÁNO (2026-08-19).** Nalezeno
+**Stav: HOTOVO (2026-08-19).** Příčina odstraněna 2026-08-18, bod (d)
+nasazen 2026-08-19. Nalezeno
 2026-08-17 vyšetřením „hrozných nesmyslů" v Telegramu, které uživatel
 nahlásil jako podezření na hacknutý systém. **Hack to nebyl.**
 
@@ -850,7 +851,7 @@ Pozn. k (b): hodnota bydlí v `kryton/app/config.py`, **ne**
 v `litellm-config.yaml` — hodnota z requestu má přednost před `max_tokens`
 u aliasu, takže strop určuje Kryton.
 
-### Otevřené: bod (d)
+### Bod (d) — HOTOVO 2026-08-19
 
 **Žádná kontrola délky odpovědi před odesláním do Telegramu.** Krok 6
 řetězu výše — krájení na šestici zpráv — dnes zabránit nic nedokáže.
@@ -905,10 +906,38 @@ je vědomě mitigace symptomu na výstupu; kořen padl s (b) a s odchodem
 3. přes 4096 → `log.warning` s celou odpovědí, useknout na hranici slova
    a připojit poznámku, že odpověď byla neobvykle dlouhá a je zkrácená.
 
-Otevřená volba je jen tvar bodu 3: **useknout na jednu zprávu** (doporučuji
-— pozorované maximum je 595 znaků, takže se to spustí jen při anomálii),
-nebo **povolit dvě zprávy a useknout až pak** (mírnější, ale seriál dvou
-zpráv zůstává normálem).
+#### Nasazeno (commit `e13940b`)
+
+Rozhodnuto uživatelem: **jedna zpráva, strop `TELEGRAM_MAX_ZNAKU=1024`** —
+tedy přísněji, než navrhovala analýza (4096). Důsledek, který k tomu patří:
+při pozorovaném maximu 595 znaků je 1024 jen 1,7násobek, takže se zkrácení
+projeví i na delších legitimních odpovědích, ne jen na anomáliích. Právě
+proto je `log.warning` s celou odpovědí součástí opravy, ne přívažkem.
+
+`_send()` má tři větve a cyklus zmizel. Ověřeno v běžícím kontejneru
+s podvrženým `_call` (do skutečného chatu nešlo nic):
+
+| vstup | odesláno |
+|---|---|
+| prázdný řetězec | 1 zpráva, `(prázdná odpověď)` |
+| jen bílé znaky | 1 zpráva, `(prázdná odpověď)` |
+| 55 znaků | 1 zpráva, beze změny |
+| 595 (nejdelší skutečná) | 1 zpráva, beze změny |
+| přesně 1024 | 1 zpráva, beze změny |
+| 1025 | 1 zpráva, 1024 se zkrácením |
+| 23 999 (patologický případ) | 1 zpráva, 1019 se zkrácením |
+
+Zkracování se řeže na hranici slova, ale jen leží-li ta hranice v poslední
+pětině povoleného úseku — u textu bez mezer by hledání mezery uřízlo skoro
+všechno. Ověřeno i na vstupu bez jediné mezery.
+
+**Opraven i vedlejší nález: prázdná odpověď dosud neodeslala nic.**
+`range(0, 0, 4000)` je prázdný rozsah, takže se tělo cyklu neprovedlo
+a fallback uvnitř byl mrtvý kód. Uživatel dostal ticho, nerozeznatelné od
+nefunkčního bota — a prázdná odpověď reálně nastává, viz P1.
+
+**Co tím vyřešené NENÍ:** krok 5 řetězu, tedy hodinová cache LiteLLM nad
+zacykleným výsledkem. Bod (d) byl vědomě mitigace symptomu na výstupu.
 
 Souvisí: P6, P9, P4.
 
