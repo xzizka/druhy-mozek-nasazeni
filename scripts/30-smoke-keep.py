@@ -163,6 +163,40 @@ check("archivovaná poznámka se vyfiltruje",
 check("poznámka v koši se vyfiltruje",
       keep._k_indexaci([FakeNote("a.2", text="a", trashed=True)]) == [])
 
+# Nalezeno 2026-08-27 na dotazu "co víme o drenáži" — poznámka "Drenáž"
+# s tělem jen z YouTube odkazu se nikdy nenašla. chunker.py nedává nadpis
+# do `content` (jen do `heading_path`), takže `content_tsv` byl složený
+# výhradně z URL. Titulek musí být i v těle, ne jen v H1.
+jen_odkaz = keep.render(FakeNote("d.1", title="Drenáž",
+                                 text="https://youtube.com/shorts/x"))
+check("titulek poznámky jen s odkazem je i v těle (ne jen v H1)",
+      jen_odkaz.count("Drenáž") >= 2, jen_odkaz)
+
+# Tentýž nález, horší varianta: poznámka jen s titulkem a PRÁZDNÝM tělem
+# ("Objednat", nic pod tím) — chunker.py bez těla pod nadpisem nevytvoří
+# žádný chunk, dokument je v indexu, ale nedohledatelný (0 chunků). Ověřeno
+# 2026-08-27 přímo v DB: 4 takové poznámky ("Objednat", "iPhone SE červený"
+# mezi nimi) měly `count(chunk.id) = 0`.
+jen_titulek = keep.render(FakeNote("d.2", title="Objednat"))
+check("poznámka jen s titulkem (bez těla) se dá vykreslit",
+      jen_titulek is not None, jen_titulek)
+
+if chunker is None:
+    print("  --   retrieval-service není po ruce, přeskakuji ověření chunkerem")
+else:
+    # Autoritativní verze obou nálezů výše — přes SKUTEČNÝ chunker.py, ne
+    # jen počítání výskytů v markdownu. `heading_path` do `content` nejde,
+    # takže tohle je jediný způsob, jak ověřit, co se opravdu zaembeduje.
+    _, telo_odkaz = chunker.split_frontmatter(jen_odkaz)
+    chunky_odkaz = chunker.chunk_markdown(telo_odkaz)
+    check("poznámka jen s odkazem dá chunk obsahující titulek",
+          any("Drenáž" in ch.content for ch in chunky_odkaz),
+          " | ".join(ch.content for ch in chunky_odkaz))
+    _, telo_titulek = chunker.split_frontmatter(jen_titulek)
+    chunky_titulek = chunker.chunk_markdown(telo_titulek)
+    check("poznámka jen s titulkem (bez těla) dá ALESPOŇ JEDEN chunk",
+          len(chunky_titulek) >= 1, repr(telo_titulek))
+
 print("\n== pojistka na mazání ==")
 res = {"k_indexaci": 0}
 check("nula poznámek z API mazání zastaví",

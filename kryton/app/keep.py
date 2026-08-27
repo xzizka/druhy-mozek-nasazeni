@@ -182,9 +182,17 @@ def render(note) -> str | None:
     # Odlišení váhy keepových útržků od deníku je tím připravené, ne hotové.
     fm.append("trust: %d" % config.KEEP_TRUST)
 
-    casti = ["---", "\n".join(fm), "---", "", "# " + titulek, ""]
-    if telo:
-        casti += [telo, ""]
+    # Titulek jde do těla i do nadpisu, ne jen do nadpisu. `chunker.py`
+    # nadpis do `content` NEDÁVÁ (jde jen do `heading_path`) - obvykle
+    # neškodí, protože tělo stejná slova zopakuje v próze. U Keepu je to
+    # ale časté selhání: poznámka, která je jen odkaz ("Drenáž" + URL),
+    # by měla `content_tsv` složené výhradně z URL - titulek, jediné
+    # smysluplné slovo, by v indexu nebyl vůbec. A poznámka bez těla vůbec
+    # ("Objednat", nic pod tím) by chunker.py přeskočil úplně - nula chunků,
+    # v indexu neexistuje. Zjištěno 2026-08-27 na dotazu o drenáži: 412
+    # z 653 poznámek je jen odkaz, 4 jsou bez těla vůbec.
+    zaklad = titulek if not telo else "%s\n\n%s" % (titulek, telo)
+    casti = ["---", "\n".join(fm), "---", "", "# " + titulek, "", zaklad, ""]
     if prilohy:
         casti += ["_(V poznámce %d příloh; obrázky se neindexují.)_" % prilohy, ""]
     return "\n".join(casti)
