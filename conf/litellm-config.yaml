@@ -215,9 +215,49 @@ model_list:
       # cistou detekci bez pasti (cs -> en). Pri volnem psani obaluje odpoved
       # do cislovaneho seznamu i kdyz SYSTEM prompt Krytona chce "plynulou
       # cestinu" - stylisticky tik, ktery by se projevil az u uzivatele.
-      model: openrouter/inclusionai/ling-2.6-flash
+      #
+      # ZMENA 2026-08-27: ling-2.6-flash -> qwen3-30b-a3b-instruct-2507.
+      #
+      # Duvod NENI cena ani sleva, ale zjisteni, ze ling-2.6-flash uz na
+      # OpenRouteru NEMA ZADNY endpoint (`GET /models/.../endpoints` vraci
+      # `endpoints: []`, primo volani dava HTTP 404 "no longer available as
+      # a free model"). Protoze `cheap` je horka cesta KAZDEHO hledani
+      # (REWRITE_MODEL), kazdy pozadavek nejdriv platil neuspesne volani na
+      # mrtvy model a teprve pak padal na `cheap-fallback` (placena gemma) -
+      # dvojita latence a nulova uspora, ktere `cheap` mel prinaset.
+      #
+      # Nahrada je zaroven ve slevove kolekci OpenRouteru (-55 % k 2026-08-27,
+      # https://openrouter.ai/collections/discounted-models), 0,048/0,193 $/M
+      # proti 0,070/0,340 u gemmy.
+      #
+      # Zmereno stejnou metodikou jako puvodni vyber ling (adaptace
+      # scripts/17-eval-cheap-models.py, skutecne prompty z rewrite.py):
+      #   detekce jazyka cs/en/de/la   20/20
+      #   prepis dotazu vcetne pasti    9/10  (minul jen past "faster" ->
+      #                                       urcil cs misto en; identifikatory
+      #                                       a latinska tazaci slova OK)
+      #   latence  median 2,06 s, max 3,36 s
+      # Pro srovnani gemma (dnesni workhorse/cheap-fallback) na tehoz testu:
+      # 19/20 (1 selhani je DNS vypadek stanice, ne model) a 8/10 - qwen tedy
+      # gemmu prekonal na obou osach za nizsi cenu. Odmitnuty kandidat ve
+      # stejnem kole: upstage/solar-pro4 (sleva -90 %, jeste levnejsi), ale
+      # na prepisu jen 7/10 - minul past "faster" A nechal latinska tazaci
+      # slova "ubi"/"quid" v klicovych slovech. Nejvyssi sleva a nejnizsi
+      # cena nejsou tu samo o sobe duvod k vyberu.
+      #
+      # Podklad: pamet cheap-ling-mrtvy-qwen-kandidat.md.
+      model: openrouter/qwen/qwen3-30b-a3b-instruct-2507
       api_key: os.environ/OPENROUTER_API_KEY
       timeout: 60
+      # Pridano soubezne s vyse: P9 (POZADAVKY.md) navrhoval `num_retries: 2`
+      # u `cheap` uz 2026-08-18 kvuli 429 z upstream_provider_shared_pool na
+      # ling-2.6-flash, ktery mel jen jednoho poskytovatele (Novita) a nebylo
+      # kam propadnout. Nikdy nenasazeno. qwen3-30b-a3b-instruct-2507 ma na
+      # OpenRouteru peti poskytovatelu (StreamLake, SiliconFlow, CoreWeave,
+      # Nebius, Alibaba), takze riziko jednoho bodu selhani je uz nizsi, ale
+      # retry proti kratkodobemu 429 je levna pojistka, kterou `workhorse`
+      # i `backstop` maji od P6 taky. Zaviraji se tim P9.
+      num_retries: 2
 
   # -------------------------------------------------------------------
   # Zaloha pro `cheap`. Placena gemma - tedy presne ten model, ktery

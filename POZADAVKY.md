@@ -945,8 +945,8 @@ Souvisí: P6, P9, P4.
 
 ## P9 — `cheap` nemá `num_retries` a propadá na 7× dražší model
 
-**Stav: ZAZNAMENÁNO (2026-08-18).** Nalezeno při smoke testu po nasazení
-kroků 2 a 3, ne zadáno dopředu. Časem k řešení.
+**Stav: HOTOVO (2026-08-27).** Nalezeno při smoke testu po nasazení
+kroků 2 a 3, ne zadáno dopředu.
 
 ### Co se stalo
 
@@ -1002,6 +1002,22 @@ a spočítat, kolik jich spadne.
 Alternativa, kdyby se ukázalo, že 429 chodí často: vlastní klíč k Novitě
 přes BYOK (OpenRouter to sám nabízí jako remedy), čímž se z rate limitu
 sdíleného fondu vystoupí. Nezanalyzováno.
+
+### Co se stalo 2026-08-27
+
+Odložené měření „jak často ten 429 chodí" se ukázalo zbytečné — problém
+zmizel jinak, než se čekalo. `ling-2.6-flash` už na OpenRouteru **nemá
+jediný endpoint** (`GET /models/.../endpoints` vrací `endpoints: []`,
+přímé volání dá `HTTP 404`, ne 429). Jediný poskytovatel z téhle sekce,
+Novita, ho přestal nabízet úplně — `upstream_provider_shared_pool` 429
+byl tedy jen předstupeň, ne konečný stav.
+
+Řešeno současně se zjištěním v `conf/litellm-config.yaml`: `cheap`
+přesunut na `openrouter/qwen/qwen3-30b-a3b-instruct-2507` (pět
+poskytovatelů, žádné jediné místo selhání) a doplněno `num_retries: 2`
+přesně podle návrhu výše — teď platí i pro krátkodobé 429, které pořád
+existují (viz P6). Podklad a srovnávací měření: paměť
+`cheap-ling-mrtvy-qwen-kandidat.md`.
 
 ---
 
