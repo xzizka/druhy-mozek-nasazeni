@@ -1226,6 +1226,173 @@ Souvisí: P11, PIPELINE.md „Rerank — regulátor latence".
 
 ---
 
+## P13 — Google Keep jako další zdroj poznámek
+
+**Stav: HOTOVO A NASAZENO (2026-08-27).** Kód hotový 2026-08-20, čekal na
+master token od uživatele.
+
+### Zadání
+
+Synchronizace **jen Keep → druhý mozek**, do Keepu se nezapisuje nic.
+Smazání poznámky v Keepu se má propsat do indexu, **stačí jednou týdně**.
+Archiv se neindexuje, obrázky se ignorují, poznámky jsou česky, nižší
+důvěra než deník, přírůstky hodinově.
+
+### Proč `gkeepapi`, a co bylo zamítnuto
+
+Keep nemá pro osobní účty žádné oficiální API. To na `keep.googleapis.com`
+existuje, ale je jen pro Google Workspace přes domain-wide delegation
+a otevření pro osobní účty Google odmítá od 2022 (issue 263769283).
+Poznámky jsou na osobním `@gmail.com`, takže tahle cesta padá.
+
+| alternativa | proč ne |
+|---|---|
+| oficiální Keep API | jen Workspace; `legend.cz` má MX na Microsoft 365, Workspace účet není |
+| MCP server (`feuerdev/keep-mcp`) | stojí na témže `gkeepapi` a témže master tokenu, jen přidává vrstvu. Hlavně ale míří jinam: MCP dodává data v čase odpovědi, kdežto tady se musí předem chunkovat a embeddovat, jinak je hybridní hledání nenajde. Kryton navíc **sám je** MCP server (P5), ne klient |
+| n8n | Keep node v n8n neexistuje (jediný komunitní má jeden commit ze šablony), takže by stejně volal tenhle Python. Přinesl by GUI za cenu 300–600 MB z page cache, na které stojí výkon HNSW scanů |
+| Google Takeout | oficiální a robustní, ale plánovaný export jde á 2 měsíce. Jako záloha dobré, jako napojení k ničemu |
+
+### Návrh
+
+`app/keep.py` píše markdown do `MARKDOWN_ROOT/keep/`, o zbytek se stará
+existující pipeline **bez jediné změny** — stejný trik, jaký `ingest.py`
+používá pro nahrané PDF a DOCX. Nula změn v retrieval service, nula v SQL.
+
+```
+Keep --gkeepapi--> app/keep.py --> /srv/brain/markdown/keep/<datum>-<id>.md --> POST /reindex
+                   brain-keep-sync.timer     hodinově, jen zakládá a přepisuje
+                   brain-keep-cleanup.timer  Mon 04:30 UTC, teprve tady se maže
+```
+
+Dva timery, protože **přidávání je vratné a mazání není.** Kdyby neoficiální
+API vrátilo neúplný seznam, hodinový úklid by index vykuchal dřív, než by si
+toho kdokoli všiml.
+
+### Rozhodnutí a proč
+
+| co | jak | proč |
+|---|---|---|
+| jméno souboru | `keep/RRRR-MM-DD-<keep_id>.md` | `source_path` je UNIQUE klíč detekce změn. Titulek v názvu = přejmenování při každé editaci titulku = smazání dokumentu a přeembeddování celé poznámky. Datum je datum **vytvoření** (nemění se) a je v cestě kvůli temporálním dotazům (P7): frontmatter se před chunkováním odřezává, ale `source_path` se do kontextu pro model posílá |
+| determinismus | žádný čas běhu ve výstupu, štítky seřazené, pevné pořadí klíčů | detekce změny je sha256 celého souboru. Jediné `synced:` ve frontmatteru = 24 přeembeddování a 24 commitů denně nad celým adresářem |
+| stav gkeepapi | neukládá se, plný pull každý běh | uložený stav je další věc, která může zastarat a tiše držet smazanou poznámku naživu. Pár set poznámek je jeden požadavek a pár set kB |
+| `lang: cs` | natvrdo do frontmatteru | keepová poznámka bývá tři slova a autodetekce na takové délce je loterie; špatný odhad rozbije stemming a s ním lexikální větev. Hodnota z frontmatteru je v indexeru autoritativní |
+| `trust: 2` | „automatický sync z venku" | **dnes to nic neváží** — je to jen filtr `trust_level <= p_max_trust` a `max_trust` je vždy 2. Odlišení váhy je tím připravené, ne hotové (viz níž) |
+| archiv | neindexuje se | volba uživatele. Zarchivování je proto z pohledu druhého mozku totéž co smazání a projeví se při nejbližším týdenním úklidu |
+| obrázky a kresby | neindexují se | v těle zůstane jen `_(V poznámce N příloh)_`. Poznámka, která je **jen** fotka, se přeskočí celá — prázdný dokument by v indexu zabral místo a v odpovědích byl k ničemu |
+| `keep/` v gitu | **ano**, na rozdíl od `_uploads/` a `_scale/` | obsah Keepu nikde jinde než v Google cloudu není. `brain-markdown-sync` z něj dělá zálohu á 15 minut a poznámka smazaná úklidem zůstane dohledatelná v historii |
+| pojistka úklidu | musí být překročené OBĚ meze: >5 souborů A >20 % | samotné procento je u malé sbírky k ničemu (u deseti poznámek je 20 % běžné úterý), samotné absolutní číslo zase u velké. Nula poznámek z API mazání zastaví vždy — to je porucha přihlášení, ne úklid. Při zablokování jde zpráva na Telegram a soubory zůstanou |
+| úklid v pondělí 04:30 UTC | po nočním `kryton-backup` | záloha tak zachytí stav **ještě před** mazáním |
+
+### Co je ověřené a co ne
+
+**Ověřeno** (`scripts/30-smoke-keep.py`, 29 kontrol, bez sítě a bez DB):
+determinismus převodu, že jiné pořadí štítků z API nezmění výsledek, že
+frontmatter přečte **skutečný** `split_frontmatter` z retrieval-service
+včetně `lang` a `trust`, stabilita cesty při změně titulku, filtr archivu
+i koše, checklisty, poznámka bez titulku, poznámka jen s přílohou, a všechny
+čtyři větve pojistky na mazání.
+
+**Ověřeno proti skutečné knihovně** `gkeepapi==0.17.1` v `python:3.13-slim`
+(2026-08-20), ne proti domněnce o jejím API:
+
+| co | zjištěno |
+|---|---|
+| `Keep.authenticate` | `(email, master_token, state=None, sync=True, device_id=None)` |
+| `node.List.items` | property (ne metoda, ne `items_`) |
+| `node.Note` | má `id`, `title`, `text`, `trashed`, `archived`, `pinned`, `labels`, `timestamps`, `blobs`, `images`, `drawings` |
+| `node.ListItem` | má `text` i `checked` |
+| `NodeLabels.all()`, `Label.name` | existují |
+| `NodeTimestamps` | `created`, `updated`, `edited`, `deleted` |
+| **`List.text`** | je serializace položek se znaky **☐/☑** |
+
+Ten poslední řádek je důvod, proč se u checklistu `text` **ignoruje**
+a tělo se skládá z `items`: jinak by v indexu byla unicode zaškrtávátka
+místo markdownu. Smoke test to kontroluje, takže se to nemůže vrátit.
+Pět kontrol jde přes skutečné `node.Note` a `node.List`, ne přes atrapy.
+
+**Kde ten test spouštět (opraveno 2026-08-21).** Původně tu stálo, že se
+celý test spustí uvnitř Krytona. Nespustí: `gkeepapi` a retrieval-service
+nejsou v provozu nikde na jednom místě, protože do obrazu Krytona jde
+`COPY app ./app` a nic víc. Test se tam rozpadl na `FileNotFoundError`
+u `rapp/__init__.py` **dřív, než se k sekci proti skutečné knihovně
+dostal** — takže těch pět kontrol nikde neběželo. Retrieval-service je
+teď nepovinná a chybějící sekce se přeskočí s poznámkou. Všech 29 kontrol
+projde v odhoditelném kontejneru s celým repozitářem (příkaz je v hlavičce
+skriptu, ověřeno 2026-08-21 proti `gkeepapi==0.17.1`); na stanici projde
+24, v Krytonovi 23.
+
+**Neověřeno, protože to bez tokenu nejde:** samotné přihlášení a co
+`Keep.all()` vrací nad živým účtem — jmenovitě jestli obsahuje i archiv
+a koš, na kterých stojí filtr `_k_indexaci()`. Filtr je bezpečný v obou
+případech, ale **první běh musí být `--nasucho`.**
+
+### Otevřené věci
+
+1. **`trust` nic neváží.** `trust_level` se v Krytonovi nepoužívá vůbec,
+   jen filtruje v SQL. „Nižší důvěra než deník" je tedy dnes splněná jen
+   formálně. Model zdroj rozezná z cesty `keep/...`, kterou v kontextu
+   vidí, ale skóre to neovlivní. Skutečné odlišení chce buď zmínku
+   o důvěře v promptu (`core.py`, malá změna), nebo penalizaci ve fúzi
+   (větší). Nezadáno.
+2. **Master token je plný přístup k celému účtu**, ne heslo aplikace
+   a ne token omezený na Keep. Leží v podman secretu `keep_master_token`,
+   takže ho krytá i šifrovaná záloha secrets na S3. Rotace znamená projít
+   browser flow znovu.
+3. **Text z obrázků se nečte.** Kdyby se v Keepu fotily tabule nebo
+   účtenky, je to samostatný požadavek (OCR, nová závislost).
+
+### Co udělat pro nasazení
+
+1. Získat master token — postup je v hlavičce `scripts/29-keep-setup.sh`
+   (browser flow přes `accounts.google.com/EmbeddedSetup`, cookie
+   `oauth_token`, `gpsoauth.exchange_token()`). Starý
+   `perform_master_login()` s heslem vrací `BadAuthentication`.
+2. `KEEP_EMAIL=... ./scripts/29-keep-setup.sh` na brainu — secret,
+   adresář `keep/` se skupinou `retrieval` (past č. 6 z NASAZENI.md),
+   kontrola `.gitignore`, oba timery.
+3. Přestavět obraz Krytona (`gkeepapi==0.17.1` v `requirements.txt`)
+   a přegenerovat quadlet s `KEEP_EMAIL`. `Secret=` se do quadletu zapíše
+   **jen když secret existuje** — past z NASAZENI.md říká, že `Secret=`
+   na neexistující secret znamená, že unit vůbec nenastartuje.
+4. `podman exec kryton python3 -m app.keep --nasucho` a zkontrolovat počty
+   dřív, než se cokoliv zapíše. (`-m` funguje bez `PYTHONPATH`, protože
+   `WORKDIR /srv` je v obrazu a `podman exec` ho dědí. Past s `PYTHONPATH=/srv`
+   platí na spouštění skriptu absolutní cestou, ne na `-m`.)
+
+### Co se stalo 2026-08-27 — nasazení
+
+Master token: první pokus `gpsoauth.exchange_token()` skončil
+`{'Error': 'BadAuthentication'}`. Příčina není zapsaná (viz gpsoauth
+README, krok „I agree" a ignorovat nekonečný loading na EmbeddedSetup),
+ale nový pokus s čerstvou cookie prošel na první dobrou — pokud se to
+zopakuje příště, podezřívej vypršelou/neúplně zkopírovanou `oauth_token`
+cookie dřív než účet samotný. Výměna proběhla bez instalace čehokoliv na
+hostitele — `gpsoauth` je závislost `gkeepapi` a je tedy už v obraze
+Krytona, takže `podman run --rm -it localhost/kryton:latest python3 -c
+"..."` stačil.
+
+**past, na kterou narazil uživatel:** `scripts/03-quadlets.sh` na konci
+VŽDY vypíše statický pětibodový návod pro nasazení od nuly (`systemctl
+start postgres`, `./04-init-db.sh`, ...), bez ohledu na to, jestli
+postgres/infinity/litellm/retrieval/kryton už běží. Při doplnění
+`KEEP_EMAIL` do quadletu to vypadalo, jako by chybělo pět kroků a obrazy
+neexistovaly — nic z toho nebyla pravda, `systemctl daemon-reload` (jediný
+reálný efekt skriptu) běžící jednotky nezastaví. Stálo za skoro-omyl se
+spuštěním `04-init-db.sh` na živé DB. Stojí za opravu (podmínit výpis
+skutečným stavem), nezadáno.
+
+Ostrý běh: 657 poznámek z Keepu, 653 nových souborů, 0 chyb, reindex
+652 nových chunků za 195 s. Timery `brain-keep-sync.timer` (hodinově,
+další za 59 min) a `brain-keep-cleanup.timer` (pondělí 04:30 UTC)
+spuštěné a ověřené — spuštění timeru samo vyvolalo jeden extra hodinový
+běh (protože `OnBootSec=10min` už dávno uplynulo od bootu hostitele),
+který korektně vrátil `nove: 0, beze_zmeny: 653`.
+
+Souvisí: P2 (tentýž trik s `_uploads/`), P7 (datum v cestě), P4 (důvěra
+a fabrikace), NASAZENI.md past č. 6 (práva na markdown).
+
+---
+
 ## K zamyšlení (nezadané, nezanalyzované — jen nápady)
 
 Volnější sekce než P1–P4: věci, které stojí za zvážení časem, ale ještě
