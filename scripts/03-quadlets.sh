@@ -17,6 +17,24 @@ QD=/etc/containers/systemd
 install -d -m 0755 "$QD"
 
 # ---------------------------------------------------------------------
+# Google Keep (P13). Prazdny e-mail = sync vypnuty; Kryton se kvuli tomu
+# nikdy neodmitne spustit, Keep je doplnkovy zdroj, ne podminka provozu.
+#     KEEP_EMAIL=tvuj@gmail.com ./scripts/03-quadlets.sh
+#
+# `Secret=` se do quadletu pise JEN kdyz secret opravdu existuje.
+# Past z NASAZENI.md: Secret= na NEEXISTUJICI podman secret znamena, ze
+# unit VUBEC NENASTARTUJE - ne ze by chybela jedna promenna. Secret
+# zaklada scripts/29-keep-setup.sh, ktery se spousti PRED timhle skriptem.
+# ---------------------------------------------------------------------
+KEEP_EMAIL="${KEEP_EMAIL:-}"
+KEEP_SECRET_LINE=""
+if podman secret inspect keep_master_token >/dev/null 2>&1; then
+    KEEP_SECRET_LINE="Secret=keep_master_token,type=env,target=KEEP_MASTER_TOKEN"
+else
+    echo "POZNAMKA: podman secret keep_master_token neexistuje, Keep sync zustane vypnuty."
+fi
+
+# ---------------------------------------------------------------------
 # Síť. Interní, bez publikování portů na LAN. Naven jde jen to, co
 # připojíš na Tailscale interface.
 # ---------------------------------------------------------------------
@@ -500,6 +518,14 @@ Secret=openrouter_api_key,type=env,target=STT_API_KEY
 # agenty (napr. OpenWork). Jina autentizace nez web UI, viz app/mcp_server.py.
 # Bez tohohle secretu endpoint existuje, ale odmitne uplne kazdy pozadavek.
 Secret=mcp_bearer_token,type=env,target=MCP_BEARER_TOKEN
+# Google Keep (P13), viz app/keep.py a scripts/29-keep-setup.sh. Jednosmerne,
+# jen cteni - do Keepu se nezapisuje nic. Prazdny KEEP_EMAIL nebo chybejici
+# secret = sync vypnuty, Kryton bezi dal.
+#
+# KEEP_MASTER_TOKEN je gpsoauth master token, tedy PLNY PRISTUP K UCTU, ne
+# heslo aplikace a ne token omezeny na Keep. Proto secret, nikdy Environment.
+Environment=KEEP_EMAIL=${KEEP_EMAIL}
+${KEEP_SECRET_LINE}
 # ZMENA proti navrhu: puvodne PublishPort=100.64.0.1:3001:3001, tedy jen na
 # Tailscale adresu. Dohodnuto publikovat i na homelab LAN 10.20.0.0/24, a
 # protoze DHCP i Tailscale adresa jsou dynamicke, bindujeme 0.0.0.0.

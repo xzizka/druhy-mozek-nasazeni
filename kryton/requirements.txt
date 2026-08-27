@@ -7,3 +7,4 @@ python-multipart==0.0.20
 boto3==1.40.11
 pypdf==5.9.0
 fastmcp==2.14.7
+gkeepapi==0.17.1

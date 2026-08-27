@@ -226,3 +226,43 @@ STT_MODEL = os.environ.get("STT_MODEL", "openai/whisper-1")
 # pro česky psaný druhý mozek, ale jde přepsat/vypnout přes env.
 STT_LANGUAGE = os.environ.get("STT_LANGUAGE", "cs")
 STT_TIMEOUT = float(os.environ.get("STT_TIMEOUT", "60"))
+
+# ---------------------------------------------------------------------------
+# Google Keep (P13). Jednosměrně, jen čtení — viz app/keep.py.
+# ---------------------------------------------------------------------------
+# Prázdný token = sync vypnutý. Kryton se kvůli němu NIKDY neodmítne
+# spustit: Keep je doplňkový zdroj, ne podmínka provozu, na rozdíl od
+# AUTH_PASSWORD nebo SESSION_SECRET.
+#
+# KEEP_MASTER_TOKEN je gpsoauth master token, tedy PLNÝ PŘÍSTUP K ÚČTU,
+# ne jen ke Keepu a ne heslo aplikace. Proto podman secret, nikdy
+# Environment (to by ho vypsalo `podman inspect` i `env` v kontejneru).
+KEEP_EMAIL = os.environ.get("KEEP_EMAIL", "")
+KEEP_MASTER_TOKEN = os.environ.get("KEEP_MASTER_TOKEN", "")
+
+# Podadresář pod MARKDOWN_ROOT. Na rozdíl od `_uploads/` a `_scale/` PATŘÍ
+# do gitu: obsah Keepu nikde jinde než v Google cloudu není a poznámka
+# smazaná týdenním úklidem musí zůstat dohledatelná v historii repozitáře.
+KEEP_DIR = os.environ.get("KEEP_DIR", "keep")
+
+# Archiv se neindexuje (volba uživatele 2026-08-20). Zarchivování poznámky
+# je tím pádem z pohledu druhého mozku totéž co smazání — projeví se při
+# nejbližším týdenním úklidu.
+KEEP_INCLUDE_ARCHIVED = os.environ.get("KEEP_INCLUDE_ARCHIVED", "0") == "1"
+
+# Natvrdo do frontmatteru, kde je hodnota autoritativní. Keepové poznámky
+# bývají tři slova a autodetekce jazyka na takové délce je loterie —
+# špatný odhad rozbije stemming a s ním celou lexikální větev hledání.
+KEEP_LANG = os.environ.get("KEEP_LANG", "cs")
+
+# 2 = automatický sync z venku (komentář u retrieval.document). Dnes je to
+# JEN filtr `trust_level <= p_max_trust` v hybrid_search, kde max_trust je
+# vždy 2 — na váhu v odpovědi to zatím nemá vliv, jen připravuje možnost
+# keepové útržky odfiltrovat.
+KEEP_TRUST = int(os.environ.get("KEEP_TRUST", "2"))
+
+# Pojistka týdenního úklidu. Musí být překročené OBĚ meze zároveň: samotné
+# procento je u malé sbírky k ničemu (u deseti poznámek je 20 % jedna
+# poznámka), samotné absolutní číslo zase u velké.
+KEEP_DELETE_MIN_ABS = int(os.environ.get("KEEP_DELETE_MIN_ABS", "5"))
+KEEP_DELETE_MAX_PODIL = float(os.environ.get("KEEP_DELETE_MAX_PODIL", "0.2"))
