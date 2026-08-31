@@ -197,25 +197,31 @@ def _handle_message(msg: dict) -> None:
         return
 
     if _je_odpoved_na_bota(msg):
-        rel = core.capture(text)
+        rel = core.capture(text, kanal="telegram")
         log.info("telegram: zaznamenano do %s (%d znaku)", rel, len(text))
         _send(chat_id, "Zaznamenáno: %s" % rel)
         return
 
     try:
         res = core.search(text)
-        odpoved, _model, _ms = core.answer(text, res["results"])
-    except Exception:
+        odp = core.answer(text, res["results"])
+    except Exception as e:
         # Text výjimky se uživateli NEPOSÍLÁ. Detail patří do logu (kam ho
         # dá `log.exception` i s tracebackem), do chatu patří srozumitelná
         # věta. Dřív se posílalo "Dotaz selhal: %s" % e, což je jednak
         # nesrozumitelné (uživatel dostal `timed out` nebo kus JSONu od
         # LiteLLM), jednak zbytečně vynáší vnitřnosti ven z brainu.
         log.exception("telegram: dotaz selhal")
+        core.zaznamenej("telegram", text, None, chyba=repr(e))
         _send(chat_id, "Na tenhle dotaz se mi teď nepodařilo odpovědět. "
                        "Zkus to prosím za chvíli znovu.")
         return
-    _send(chat_id, odpoved)
+    # Zápis je PŘED odesláním, aby se stopa uložila i tehdy, když spadne
+    # Telegram API — a naopak `zaznamenej()` nikdy nevyhodí výjimku, takže
+    # rozbitá databáze nezabrání odeslání. Ani jedna z těch dvou věcí nesmí
+    # shodit tu druhou.
+    core.zaznamenej("telegram", text, odp, res["results"])
+    _send(chat_id, odp.text)
 
 
 def _pocatecni_offset() -> int:

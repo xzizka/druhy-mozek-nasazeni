@@ -9,6 +9,7 @@ import time
 import unicodedata
 from datetime import date
 from pathlib import Path
+from typing import NamedTuple
 
 import httpx
 
@@ -74,6 +75,11 @@ AGREGACNI_SLOVA = (
     "statistik", "nejvic", "nejvice", "nejmene", "nejdelsi", "nejkratsi",
     "nejcastej", "serad", "seradit", "rozlozeni", "zastoupen", "podle jazyka",
     "vsech dokumentu", "vsechny dokumenty", "kazdeho jazyka",
+    # P14 (2026-08-31): extremální temporální dotazy ("kdy jsem vložil první
+    # záznam z telegramu") — stejná mezera, jakou u "vcera"/"posledni" popsal
+    # P7. Nerozlišuje kanál, jen nasměruje na odkaz na /korpus; skutečná
+    # data teď dává kanal_facts() níž.
+    "prvni", "poprve", "nejstarsi",
 )
 
 
@@ -119,6 +125,38 @@ def corpus_facts() -> str:
             "- dokumentů podle jazyka: %s\n"
             "- textových úseků (chunků) celkem: %s\n"
             % (s.get("documents", "?"), parts or "neznámé", s.get("chunks", "?")))
+
+
+def kanal_facts() -> str:
+    """Ověřená fakta o tom, odkud a kdy přišly ZÁPISY poznámek (P14).
+
+    Stejná úvaha jako u `corpus_facts()`: dotaz typu „kdy jsem vložil první
+    záznam z telegramu" se z osmi dovolávaných úryvků spočítat nedá (žádná
+    poznámka o sobě netvrdí, že je první svého kanálu), takže se to bere
+    přímo z `inbox`, ne z modelu ani z reranku.
+
+    Sleduje se jen od nasazení sloupce `inbox.kanal` (P14, 2026-08-31) —
+    starší zápisy mají `kanal='web'` jako výchozí hodnotu ALTERu, ne
+    skutečný původ, takže číslo pro "web" před tímhle datem NEVĚŘIT.
+    Bez toho by model tichým zobecněním z výchozí hodnoty prohlásil něco
+    o historii, kterou databáze fakticky nezaznamenala.
+    """
+    try:
+        stats = db.kanal_stats()
+    except Exception as e:
+        log.warning("fakta o kanalech nedostupna: %s", e)
+        return ""
+    if not stats:
+        return ""
+    radky = "\n".join(
+        "- %s: %d zápisů, první %s, poslední %s" % (
+            s["kanal"], s["pocet"],
+            s["prvni"].date().isoformat() if s["prvni"] else "?",
+            s["posledni"].date().isoformat() if s["posledni"] else "?")
+        for s in stats)
+    return ("Ověřená čísla o zápisech poznámek podle kanálu (přímo z "
+            "databáze, sleduje se od 2026-08-31 — starší 'web' je výchozí "
+            "hodnota migrace, ne ověřený původ):\n%s\n" % radky)
 
 
 def corpus_stats() -> dict:
@@ -277,15 +315,84 @@ def zkontroluj_fallback(pozadovany: str, vraceny: str) -> bool:
     return True
 
 
+class Odpoved(NamedTuple):
+    """Odpověď i se stopou po rozhodnutích, která k ní vedla.
+
+    Do 2026-08-24 se vracela trojice `(text, model, ms)`. Stopa přibyla
+    proto, že P4, P7-B i P8 jsou shodně chyby, které V TEXTU ODPOVĚDI VIDĚT
+    NEJSOU: u P7-B neprojde prahem ani jeden chunk a uživatel dostane
+    zdvořilé „nic jsem nenašel", u P8 odpovídá čtyři dny jiný model, než
+    který jsme chtěli. Obojí je v okamžiku odpovědi ZNÁMÉ — jen se to
+    zahazovalo. Odsud to jde do `message` a v `31-denni-report.py` z toho
+    vzniká alert.
+
+    `model` je ten, který SKUTEČNĚ odpověděl (LiteLLM vrací po propadu
+    konkrétní model místo aliasu, viz `zkontroluj_fallback`). Požadovaný
+    alias je `config.ANSWER_MODEL`, takže se druhý sloupec neukládá —
+    `stopa["fallback"]` říká, jestli se ty dva lišily.
+    """
+    text: str
+    model: str
+    ms: int
+    stopa: dict
+
+
+def _stopa(kandidatu: int, nad_prahem: int, max_rerank: float | None,
+           odmitnuto: bool, fallback: bool) -> dict:
+    return {"n_kandidatu": kandidatu, "n_nad_prahem": nad_prahem,
+            "max_rerank": max_rerank, "odmitnuto": odmitnuto,
+            "fallback": fallback}
+
+
+def zaznamenej(kanal: str, dotaz: str, odp: "Odpoved | None",
+               hits: list[dict] | None = None, chyba: str = "") -> None:
+    """Uloží dotaz a odpověď z kanálu, který nemá vlastní konverzační vlákno.
+
+    NIKDY NEVYHODÍ VÝJIMKU, a to je celý smysl téhle funkce. Telegram i MCP
+    do 2026-08-24 odpovídaly bez databáze úplně; kdyby je zápis mohl shodit,
+    udělal by z auditní stopy novou závislost té jediné cesty, kterou
+    uživatel používá denně — a výpadek Postgresu by se projevil jako mlčící
+    bot. Záznam smí selhat tiše do logu, odpověď ne. Je to tatáž úvaha jako
+    u `detect_language()`, jen obrácená: tam tichý propad ŠKODIL, protože
+    se zapisoval do indexu; tady je tichý propad správně, protože se jím nic
+    neřídí.
+
+    Konverzace je jedna na (kanál, den) — viz `db.konverzace_kanalu()`.
+    """
+    try:
+        cid = db.konverzace_kanalu(kanal, date.today().isoformat())
+        db.add_message(cid, "user", dotaz)
+        if odp is None:
+            db.add_message(cid, "assistant", "Dotaz selhal: %s" % chyba)
+            return
+        cits = [{"source_path": h["source_path"],
+                 "heading_path": h.get("heading_path"),
+                 "chunk_id": h["chunk_id"],
+                 "rerank_score": h.get("rerank_score")}
+                for h in (hits or [])]
+        db.add_message(cid, "assistant", odp.text, cits, odp.model, odp.ms,
+                       stopa=odp.stopa)
+    except Exception:
+        log.exception("zaznam dotazu z kanalu %r do DB selhal (odpoved doruce"
+                      "na, jen se neulozila)", kanal)
+
+
 def answer(query: str, hits: list[dict], prior: list[dict] | None = None,
-           extra: str = "") -> tuple[str, str, int]:
-    """Vrátí (odpověď, model, latence_ms).
+           extra: str = "") -> Odpoved:
+    """Vrátí `Odpoved(text, model, latence_ms, stopa)`.
 
     `prior` jsou předchozí zprávy konverzace. Pozor na hranici: slouží jen
     generování odpovědi. Vyhledávání dostává surový text dotazu, takže
     u doplňujícího dotazu bez podstatného jména („a proč?") se sice model
     zorientuje, ale chunky se dohledávají podle té krátké fráze.
     """
+    kandidatu = len(hits)
+    # Maximum se bere PŘED filtrem, a to je podstatné: po filtru je u P7-B
+    # seznam prázdný, takže by se do stopy uložilo None a z reportu by
+    # nešlo poznat rozdíl mezi „reranker nic nenabídl" a „nabídl 0,0215,
+    # což je o řád pod prahem 0,1". Právě tenhle rozdíl je celá diagnóza.
+    nejlepsi = max((float(h["rerank_score"]) for h in hits
+                    if h.get("rerank_score") is not None), default=None)
     hits = dost_relevantni(hits)
     ctx = "\n\n".join(
         f"[{i+1}] {h['source_path']}"
@@ -293,11 +400,12 @@ def answer(query: str, hits: list[dict], prior: list[dict] | None = None,
         + f"\n{h['content']}"
         for i, h in enumerate(hits))
     if not ctx and not extra:
-        return ("V poznámkách jsem k tomu nic nenašel.", "", 0)
+        return Odpoved("V poznámkách jsem k tomu nic nenašel.", "", 0,
+                       _stopa(kandidatu, 0, nejlepsi, True, False))
 
     msgs = [{"role": "system", "content": SYSTEM}]
     msgs += history_messages(prior)
-    facts = corpus_facts()
+    facts = corpus_facts() + kanal_facts()
     uryvky = f"Úryvky z poznámek:\n\n{ctx}\n\n" if ctx else ""
     msgs.append({"role": "user",
                  "content": dnesni_datum()
@@ -328,7 +436,7 @@ def answer(query: str, hits: list[dict], prior: list[dict] | None = None,
     if r.status_code != 200:
         raise RuntimeError(f"LiteLLM {r.status_code}: {r.text[:200]}")
     d = r.json()
-    zkontroluj_fallback(config.ANSWER_MODEL, d.get("model") or "")
+    propadl = zkontroluj_fallback(config.ANSWER_MODEL, d.get("model") or "")
     msg = d["choices"][0]["message"]
     text = (msg.get("content") or "").strip()
     if not text:
@@ -338,7 +446,8 @@ def answer(query: str, hits: list[dict], prior: list[dict] | None = None,
         fin = d["choices"][0].get("finish_reason")
         text = (f"(model nevrátil odpověď, finish_reason={fin} — "
                 f"zvyš ANSWER_MAX_TOKENS)")
-    return text, d.get("model", config.ANSWER_MODEL), ms
+    return Odpoved(text, d.get("model", config.ANSWER_MODEL), ms,
+                   _stopa(kandidatu, len(hits), nejlepsi, False, propadl))
 
 
 # ---------------------------------------------------------------------------
@@ -375,8 +484,16 @@ def safe_path(rel: str) -> Path:
     return p
 
 
-def capture(text: str, title: str | None = None) -> str:
-    """Nová poznámka, nebo připsání do denního zápisu když není titulek."""
+def capture(text: str, title: str | None = None, kanal: str = "web") -> str:
+    """Nová poznámka, nebo připsání do denního zápisu když není titulek.
+
+    `kanal` (P14) jde jen do `inbox.kanal` — NE do samotného markdownu.
+    Denní zápis je jeden soubor na den se sdílenými `## HH:MM` bloky, takže
+    zápis od telegramu ráno a od webu večer skončí ve STEJNÉM dokumentu;
+    frontmatter je vlastnost dokumentu, ne jednotlivého zápisu, takže by
+    tam jedna hodnota kanálu lhala o druhém zápisu. `inbox` řádek je oproti
+    tomu vždycky jeden na `capture()`, takže kanál sedí přesně.
+    """
     if title:
         rel = f"{date.today().isoformat()}-{slug(title)}.md"
         p = safe_path(rel)
@@ -395,6 +512,6 @@ def capture(text: str, title: str | None = None) -> str:
         else:
             p.write_text(f"# {date.today().isoformat()}\n\n## {stamp}\n\n{text.strip()}\n",
                          encoding="utf-8")
-    db.add_inbox(rel, text)
+    db.add_inbox(rel, text, kanal)
     trigger_reindex()
     return rel

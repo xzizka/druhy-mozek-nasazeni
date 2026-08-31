@@ -45,16 +45,17 @@ mcp = FastMCP(name="kryton", auth=_SdilenyToken())
 def hledat(dotaz: str) -> dict:
     """Zeptej se na osobní poznámky uživatele a dostaň odpověď s citacemi."""
     vysledky = core.search(dotaz)
-    odpoved, model, _latence_ms = core.answer(dotaz, vysledky["results"])
+    odp = core.answer(dotaz, vysledky["results"])
+    core.zaznamenej("mcp", dotaz, odp, vysledky["results"])
     citace = [
         {"source_path": h["source_path"], "heading_path": h.get("heading_path")}
         for h in vysledky["results"]
     ]
-    return {"odpoved": odpoved, "citace": citace, "model": model}
+    return {"odpoved": odp.text, "citace": citace, "model": odp.model}
 
 
 @mcp.tool()
 def zachytit(text: str, nadpis: str | None = None) -> dict:
     """Zapiš novou poznámku do Druhého mozku (bez nadpisu jde do denního zápisu)."""
-    rel = core.capture(text, nadpis)
+    rel = core.capture(text, nadpis, kanal="mcp")
     return {"ulozeno_do": rel}

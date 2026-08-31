@@ -1409,6 +1409,141 @@ a fabrikace), NASAZENI.md past č. 6 (práva na markdown).
 
 ---
 
+## P14 — Odkud přišel ZÁPIS poznámky se nikde neukládá, dotaz na "první záznam z kanálu" je nezodpovědatelný
+
+**Stav: OPRAVENO V KÓDU (2026-08-31), NENASAZENO, NECOMMITNUTO.** Nalezeno
+tím, že se uživatel Krytona zeptal „Kdy jsem vložil do paměti první záznam
+z telegramu?" a dostal „V poznámkách jsem k tomu nic nenašel."
+
+### Co se stalo a proč to selhává viditelně (mechanismus P7/P4)
+
+`je_agregacni()` slovo „první" nechytá (`AGREGACNI_SLOVA` mělo jen
+kolik/počet/nejvíc/seřaď — stejná mezera, jakou u „včera"/„poslední"
+popsal P7). Dotaz proto padá do běžného RAGu: žádná poznámka v deníku
+netvrdí „tohle je moje první telegramová poznámka", takže nemá lexikální
+ani sémantickou kotvu, rerank skóre vyjde skoro nulové a `ANSWER_MIN_RERANK
+= 0.1` (zavedený kvůli P4) všechny chunky zahodí — `answer()` vrátí pevnou
+větu **bez volání modelu**. Přesně podpis P7-B.
+
+### Hlubší příčina: ta informace se NIKDE nepersistuje jako data
+
+Na rozdíl od P7 (deník existuje, jen se špatně řadí), tady chybí samotná
+data — žádné řazení by je nenašlo:
+
+- `core.capture()` psal poznámku jako čistý markdown (`# nadpis` +
+  `## HH:MM`) bez jakéhokoli pole o kanálu.
+- `db.add_inbox(rel, text)` ukládal jen `source_path, excerpt, created_at`
+  — tabulka `inbox` sloupec pro kanál neměla.
+- `core.zaznamenej("telegram", ...)`, jediné místo, které řetězec
+  `"telegram"` vůbec ukládalo do DB, se volá jen z DOTAZOVÉ větve
+  (`core.search`+`core.answer()`), nikdy ze záchytové (`core.capture()`,
+  reply-gesto). Zápis poznámky z Telegramu tedy kanál neloguje do
+  Postgresu vůbec — jediná stopa byl řádek v journalu kontejneru, mimo DB,
+  mimo index, mimo cokoliv, co RAG nebo P1b-styl SQL cesta může přečíst.
+
+**Proč to není duplikát P7 ani P1:** neodpovědtelné z RAGu jako P1
+(agregace), sebejisté/tiché při nulovém skóre jako P7-B, ale navíc jde
+o mezeru v DATOVÉM MODELU, ne v řazení nebo prahu — žádná oprava
+retrievalu by tohle nevyřešila, protože fakt se nikde nezapisoval.
+
+### Skutečná odpověď na uživatelův dotaz (dohledáno mimo Kryton)
+
+`journalctl -u kryton` na brainu jde zpátky až ke spuštění kontejneru
+(2026-08-06), tedy před nasazení Telegram-kroku 1 (2026-08-10) — žádné
+riziko utnuté retence. Formát logovací věty se od prvního commitu
+nezměnil (`git log --follow -p -- kryton/app/telegram.py`). Nalezeno:
+
+> `Aug 10 14:55:28 brain kryton[1259833]: telegram: zaznamenano do
+> denik/2026-08-10.md (48 znaku)`
+
+**První telegramový zápis je `denik/2026-08-10.md`, 2026-08-10 14:55:28.**
+Tohle je jednorázová ruční rekonstrukce z journalu, ne něco, co teď umí
+odpovědět Kryton sám — proto oprava níž.
+
+### Implementace (kroky 1–3)
+
+1. **`inbox.kanal`** — nový sloupec (`ALTER ... DEFAULT 'web'`, migrace
+   idempotentní jako u `conversation.kanal` z dohledu/zlaté sady), index
+   `(kanal, created_at)`. `core.capture()` dostal parametr `kanal: str =
+   "web"`, provlečeno do `db.add_inbox(rel, text, kanal)`.
+   `telegram.py` volá `core.capture(text, kanal="telegram")`,
+   `mcp_server.py` `core.capture(text, nadpis, kanal="mcp")`, web UI
+   (`main.py`) zůstal na výchozím `"web"`.
+
+   **Vědomě NE do frontmatteru / `retrieval.document.meta`:** denní zápis
+   je jeden soubor na den se sdílenými `## HH:MM` bloky — telegramový zápis
+   ráno a webový večer skončí ve STEJNÉM dokumentu. Frontmatter i
+   `document.meta` jsou vlastnost DOKUMENTU, kdežto kanál je vlastnost
+   JEDNOTLIVÉHO zápisu — jedna hodnota by u smíšeného dne o jednom ze
+   zápisů lhala. `inbox` má naopak vždycky jeden řádek na `capture()`,
+   takže kanál sedí přesně. Tohle je oprava vlastního návrhu z minulé
+   analýzy (počítalo se s frontmatterem), zjištěná až při psaní kódu.
+
+2. **`core.kanal_facts()`** — analogie `corpus_facts()` (P1a): `SELECT
+   kanal, count(*), min(created_at), max(created_at) FROM inbox GROUP BY
+   kanal`, naformátováno jako ověřená fakta a vpleteno do `answer()`
+   **vždy** (`facts = corpus_facts() + kanal_facts()`), ne jen když
+   `je_agregacni()` vrátí `True` — stejná úvaha jako u `corpus_facts()`:
+   je to pár desítek tokenů a model si díky tomu poradí i s formulacemi,
+   které detektor klíčových slov nechytí.
+
+   **Nejde přes `platform_ro`/P1b analytiku** — `inbox` je v Krytonově
+   vlastní DB (`DATABASE_URL`), `platform_ro` vidí jen schéma `retrieval`
+   přes samostatné `ANALYTICS_DATABASE_URL`. Řešeno jako pevný dotaz přes
+   existující `db` pool, ne jako model-psané SQL — bezpečnější (žádná nová
+   plocha pro text-to-SQL) a stačí to, protože jde o jeden known-shape
+   dotaz, ne o obecnou analytiku.
+
+   Text faktů explicitně říká, že se to sleduje až od 2026-08-31 a že
+   `'web'` u starších dat je výchozí hodnota migrace, ne ověřený původ —
+   jinak by model tichým zobecněním z defaultu prohlásil něco o historii,
+   kterou DB fakticky nezaznamenala.
+
+3. **`AGREGACNI_SLOVA`** rozšířeno o `prvni`, `poprve`, `nejstarsi` — chytí
+   aspoň `/korpus`-hint v UI (`main.py`) i pro tuhle třídu dotazů, ne jen
+   pro počty. Časová slova z P7 (včera/poslední/nejnovější) se NEDOPLŇUJí
+   — ta souvisí s chronologickým řazením (P7 část B, pořád otevřená), ne
+   s tímhle nálezem, a jejich přidání by jen změnilo pevnou větu na odkaz
+   na `/korpus`, aniž by data k odpovědi přibyla.
+
+### Co je ověřené a co ne
+
+**Ověřeno bez reálné DB** (izolovaný skript, mimo repozitář — `fastmcp`
+není dostupné v offline pip indexu sandboxu, takže přes `main.py`/
+`mcp_server.py` to neprošlo): `capture()` bez/s `kanal` volá `add_inbox`
+se správnou třetí hodnotou, `kanal_facts()` formátování a prázdný případ,
+`je_agregacni()` na nových slovech i regrese na starých. `python3 -m
+py_compile` na všech čtyřech upravených souborech. `scripts/
+13-smoke-kryton.py` (necommitnutý stub z dohledu/zlaté sady) opraven —
+`db.add_inbox` tam měl starou dvouparametrovou signaturu a spadl by na
+`TypeError`, doplněn i stub `db.kanal_stats`.
+
+**Neověřeno:** reálná migrace `ALTER TABLE inbox ADD COLUMN` proti běžící
+databázi na brainu (SQL syntakticky odpovídá existujícímu vzoru
+`conversation.kanal`, ale nespuštěno naostro), a `scripts/
+13-smoke-kryton.py` jako celek (potřebuje `fastmcp`, které tu není k mání).
+
+### Otevřené věci
+
+1. **Google Keep (`app/keep.py`) obchází `core.capture()`/`inbox` úplně**
+   — píše markdown přímo a volá `core.trigger_reindex()` „bez DB a bez
+   síťových závislostí core" (vlastní komentář v kódu). Keepové zápisy se
+   proto v `inbox.kanal` nikdy neobjeví. Samostatná mezera, nezadáno.
+2. **Historii nejde dopočítat.** Zápisy před 2026-08-31 mají `kanal='web'`
+   jen proto, že je to default ALTERu — ne proto, že by web byl skutečný
+   zdroj. `kanal_facts()` na to upozorňuje v textu, ale číslo pro „web"
+   před tímhle datem je ve skutečnosti „neznámo".
+3. **Nenasazeno.** Migrace i kód jsou v pracovní kopii, ne na brainu, ne
+   v gitu — čeká na rozhodnutí, jestli/kdy commitovat a nasadit vedle
+   necommitnutého dohledu a zlaté sady (viz `dohled-a-zlata-sada`), který
+   `conversation.kanal` už zavedl pro dotazovou větev.
+
+Souvisí: P7 (temporální dotazy, stejný rerank-práh mechanismus), P4 (práh
+`ANSWER_MIN_RERANK`), P1 (`corpus_facts()`/P1b vzor), NASAZENI.md
+(Telegram-můstek).
+
+---
+
 ## K zamyšlení (nezadané, nezanalyzované — jen nápady)
 
 Volnější sekce než P1–P4: věci, které stojí za zvážení časem, ale ještě

@@ -112,6 +112,39 @@ CREATE TABLE IF NOT EXISTS upload (
     created_at    timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS upload_sha_ix ON upload (sha256);
+
+-- Stopa po rozhodnutích, která k odpovědi vedla (2026-08-24). Sloupce, ne
+-- jedno jsonb: přesně nad těmihle pěti se v `31-denni-report.py` agreguje
+-- (podíl odmítnutí, průměr max_rerank, počet propadů), a `->>` s castem
+-- v každém dotazu by z reportu udělal nečitelnou změť.
+--
+-- Přidává se ALTERem, ne do CREATE TABLE výše: databáze na brainu existuje
+-- od 2026-08-06 a CREATE TABLE IF NOT EXISTS by se na ní neprovedl, takže
+-- by nové sloupce nikdy nevznikly. IF NOT EXISTS u ADD COLUMN drží
+-- idempotenci, na které stojí celý `init()`.
+-- Odkud konverzace přišla. Bez tohohle sloupce se kanál dal odhadovat jen
+-- z titulku, jenže ten je u webových konverzací text otázky — report by pak
+-- místo tří kanálů vypsal první slovo každého dotazu.
+ALTER TABLE conversation ADD COLUMN IF NOT EXISTS kanal text NOT NULL DEFAULT 'web';
+
+ALTER TABLE message ADD COLUMN IF NOT EXISTS n_kandidatu  int;
+ALTER TABLE message ADD COLUMN IF NOT EXISTS n_nad_prahem int;
+ALTER TABLE message ADD COLUMN IF NOT EXISTS max_rerank   real;
+ALTER TABLE message ADD COLUMN IF NOT EXISTS odmitnuto    boolean;
+ALTER TABLE message ADD COLUMN IF NOT EXISTS fallback     boolean;
+
+-- Report se ptá „co bylo za posledních N hodin" napříč konverzacemi.
+-- Bez tohohle indexu je to seq scan přes celou tabulku.
+CREATE INDEX IF NOT EXISTS message_created_ix ON message (created_at);
+
+-- P14 (2026-08-31): odkud přišel ZÁPIS poznámky. `conversation.kanal` výš
+-- řeší jen DOTAZY — capture() přes `core.zaznamenej()` nikdy neprochází,
+-- takže telegramový zápis poznámky nezanechával v DB žádnou stopu kanálu
+-- (jen řádek v journalu kontejneru). Bez tohohle sloupce je "kdy jsem
+-- vložil první záznam z telegramu" nezodpovědatelné strukturálně, ne jen
+-- špatně zodpovězené — data k tomu nikde neexistovala.
+ALTER TABLE inbox ADD COLUMN IF NOT EXISTS kanal text NOT NULL DEFAULT 'web';
+CREATE INDEX IF NOT EXISTS inbox_kanal_ix ON inbox (kanal, created_at);
 """
 
 
@@ -149,13 +182,56 @@ def new_conversation(title: str) -> uuid.UUID:
 
 
 def add_message(conversation_id, role: str, content: str, citations=None,
-                model: str = None, latency_ms: int = None) -> int:
+                model: str = None, latency_ms: int = None,
+                stopa: dict = None) -> int:
+    """`stopa` je diagnostika z `core.Odpoved` — viz komentář u SCHEMA.
+
+    Chybějící stopa se ukládá jako NULL, ne jako nuly. Rozdíl je pro report
+    podstatný: NULL znamená „tahle zpráva stopu nemá" (uživatelský dotaz,
+    záznam z doby před 2026-08-24, selhaná odpověď), zatímco 0 znamená
+    „retrieval nevrátil ani jednoho kandidáta". Kdyby se to slilo, vypadal
+    by každý starý řádek jako odmítnutí a podíl odmítnutí v reportu by byl
+    nesmysl.
+    """
+    s = stopa or {}
     with _pool.connection() as conn:
         return conn.execute(
-            "INSERT INTO message (conversation_id, role, content, citations, model, latency_ms) "
-            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            "INSERT INTO message (conversation_id, role, content, citations, model, "
+            "                     latency_ms, n_kandidatu, n_nad_prahem, max_rerank, "
+            "                     odmitnuto, fallback) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (conversation_id, role, content, json.dumps(citations or []),
-             model, latency_ms)).fetchone()[0]
+             model, latency_ms, s.get("n_kandidatu"), s.get("n_nad_prahem"),
+             s.get("max_rerank"), s.get("odmitnuto"),
+             s.get("fallback"))).fetchone()[0]
+
+
+# Jmenný prostor pro deterministická UUID konverzací z kanálů bez vlastního
+# vlákna (Telegram, MCP). Náhodné UUID tu použít NEJDE: vlákno se musí najít
+# znovu při každé příchozí zprávě, a hledání podle titulku by při dvou
+# zprávách v téže vteřině založilo dvě konverzace. Z dvojice (kanál, den)
+# vyjde vždycky totéž UUID, takže stačí INSERT ... ON CONFLICT DO NOTHING
+# a není potřeba ani SELECT, ani zámek.
+_NS_KANAL = uuid.UUID("6f1b0f4e-5c2a-4f1e-9a3d-8b7c6d5e4f30")
+
+
+def konverzace_kanalu(kanal: str, den: str) -> str:
+    """Najde nebo založí konverzaci pro (kanál, den). Vrací id jako text.
+
+    Jedna konverzace na den, ne na zprávu: v Telegramu není nic, z čeho by
+    šlo vlákno poznat, a konverzace o dvou zprávách by z `/historie` udělaly
+    nepoužitelný seznam. Den je hranice, kterou už používá `daily_loop`.
+
+    POZOR: seskupení do jedné konverzace NEZNAMENÁ, že model dostává
+    historii. Telegram volá `core.answer()` bez `prior` jako dřív a tahle
+    změna se ho nedotýká — je to čistě způsob uložení, ne změna chování.
+    """
+    cid = uuid.uuid5(_NS_KANAL, "%s:%s" % (kanal, den))
+    with _pool.connection() as conn:
+        conn.execute("INSERT INTO conversation (id, title, kanal) "
+                     "VALUES (%s, %s, %s) ON CONFLICT (id) DO NOTHING",
+                     (cid, "%s %s" % (kanal, den), kanal))
+    return str(cid)
 
 
 def conversations(limit: int = 50) -> list[dict]:
@@ -201,10 +277,28 @@ def set_feedback(message_id: int, rating: int, useful=None, note: str = None) ->
             (message_id, rating, json.dumps(useful or []), note))
 
 
-def add_inbox(source_path: str, excerpt: str) -> None:
+def add_inbox(source_path: str, excerpt: str, kanal: str = "web") -> None:
     with _pool.connection() as conn:
-        conn.execute("INSERT INTO inbox (source_path, excerpt) VALUES (%s, %s)",
-                     (source_path, (excerpt or "")[:500]))
+        conn.execute("INSERT INTO inbox (source_path, excerpt, kanal) VALUES (%s, %s, %s)",
+                     (source_path, (excerpt or "")[:500], kanal))
+
+
+def kanal_stats() -> list[dict]:
+    """Počet, první a poslední zápis pro každý kanál (P14).
+
+    Čte se z `inbox`, ne z `retrieval.document` — dokument jako
+    `denik/2026-08-10.md` míchá zápisy z více kanálů v jednom souboru
+    (další příspěvek téhož dne od jiného kanálu), takže kanál je vlastnost
+    JEDNOTLIVÉHO zápisu, ne dokumentu. Proto taky nejde tohle číslo dostat
+    přes `platform_ro`/`retrieval` analytiku (P1b) — `inbox` je v Krytonově
+    vlastní DB, tam `platform_ro` vůbec nevidí.
+    """
+    with _pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT kanal, count(*), min(created_at), max(created_at) "
+            "FROM inbox GROUP BY kanal ORDER BY min(created_at)").fetchall()
+    return [{"kanal": k, "pocet": c, "prvni": prvni, "posledni": posledni}
+            for k, c, prvni, posledni in rows]
 
 
 def inbox_open(limit: int = 100) -> list[dict]:

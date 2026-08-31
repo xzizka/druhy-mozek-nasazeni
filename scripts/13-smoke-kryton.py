@@ -65,7 +65,8 @@ db.conversations = lambda limit=50: [
 db.messages = lambda cid: list(_msgs)
 db.stats = lambda: {"conversations": 1, "messages": len(_msgs)}
 db.set_feedback = lambda mid, rating, useful=None, note=None: _msgs and None
-db.add_inbox = lambda p, e: None
+db.add_inbox = lambda p, e, kanal="web": None
+db.kanal_stats = lambda: []
 db.inbox_open = lambda limit=100: _inbox
 db.inbox_done = lambda i: None
 
@@ -84,15 +85,28 @@ def _delete_conversation(cid):
 db.delete_conversation = _delete_conversation
 
 
-def _add_message(cid, role, content, citations=None, model=None, latency_ms=None):
+def _add_message(cid, role, content, citations=None, model=None,
+                 latency_ms=None, stopa=None):
     _msgs.append({"id": len(_msgs) + 1, "role": role, "content": content,
                   "citations": citations or [], "model": model,
                   "latency_ms": latency_ms, "created_at": datetime.now(),
-                  "rating": None})
+                  "rating": None, "stopa": stopa, "cid": cid})
     return len(_msgs)
 
 
 db.add_message = _add_message
+
+# Deterministické UUID z (kanál, den) — stub jen vrací totéž, co dostane,
+# aby šlo v testu ověřit, že Telegram i MCP píšou každý do svého vlákna.
+KANALY = []
+
+
+def _konverzace_kanalu(kanal, den):
+    KANALY.append((kanal, den))
+    return "kanal-%s-%s" % (kanal, den)
+
+
+db.konverzace_kanalu = _konverzace_kanalu
 
 # --- stub retrieval a LLM ----------------------------------------------
 HIT = {"chunk_id": "c1", "document_id": "d1", "source_path": "poznamky/test.md",
@@ -106,9 +120,13 @@ core.search = lambda q, limit=None, rewrite=None, **kw: (
 def _answer(q, hits, prior=None, extra=""):
     SEEN["prior"] = prior
     SEEN["extra"] = extra
-    return ("Odpověď s citací [1].", "reasoning", 1234)
+    return core.Odpoved("Odpověď s citací [1].", "reasoning", 1234,
+                        {"n_kandidatu": 1, "n_nad_prahem": 1,
+                         "max_rerank": 0.987, "odmitnuto": False,
+                         "fallback": False})
 
 
+_PUVODNI_ANSWER = core.answer
 core.answer = _answer
 core.trigger_reindex = lambda: None
 
@@ -365,8 +383,13 @@ check("nedostupný retrieval nezhodí stránku",
       r.status_code == 200 and "Retrieval neodpovídá" in r.text, str(r.status_code))
 core.corpus_stats = lambda: STATS
 
-check("ANSWER_MAX_TOKENS zvednutý na 8000", core.config.ANSWER_MAX_TOKENS == 8000,
-      str(core.config.ANSWER_MAX_TOKENS))
+# 8000 -> 2000 v commitu 214fee3 (2026-08-18, krok 3): gpt-oss-120b má proti
+# big-pickle řádově menší apetit na reasoning_content (medián 109 tokenů proti
+# 402 a víc), a strop 8000 byl přímou příčinou zacyklení gemmy 2026-08-17.
+# Tenhle check zůstal šest dní na staré hodnotě a smoke test byl celou tu dobu
+# červený, aniž si toho kdo všiml — nic ho totiž nespouští automaticky.
+check("ANSWER_MAX_TOKENS snížený na 2000 (P8 bod b, krok 3)",
+      core.config.ANSWER_MAX_TOKENS == 2000, str(core.config.ANSWER_MAX_TOKENS))
 
 print("== P1a: rozpoznání agregačních dotazů ==")
 for q in ["Kolik je kterých knih?",
@@ -860,6 +883,82 @@ check("stejný den podruhé se nepošle",
 check("další den po hodině X se pošle znovu",
       telegram._mel_bych_poslat_otazku(datetime(2026, 1, 2, 6, 0, tzinfo=timezone.utc)))
 telegram._posledni_odeslano[0] = None
+
+print("== stopa odpovědi (P4/P7-B/P8: co v textu odpovědi vidět není) ==")
+
+# Testuje se SKUTEČNÝ `core.answer` (uschovaný do `_PUVODNI_ANSWER` ještě
+# před nasazením stubu), ne stub. Jde to bez sítě: když pod prahem nezbyde
+# ani jeden chunk, funkce se vrátí dřív, než by zavolala LiteLLM — a právě
+# tahle větev je P7-B.
+_puv_prah = core.config.ANSWER_MIN_RERANK
+core.config.ANSWER_MIN_RERANK = 0.1
+_slabe = [dict(HIT, chunk_id="c9", rerank_score=0.0215)]
+_odp = _PUVODNI_ANSWER("temporální dotaz", _slabe)
+check("pod prahem se neodpoví a stopa to řekne",
+      _odp.stopa["odmitnuto"] is True and _odp.stopa["n_nad_prahem"] == 0,
+      str(_odp.stopa))
+check("max_rerank se bere PŘED filtrem, jinak by v P7-B bylo None",
+      _odp.stopa["max_rerank"] == 0.0215, str(_odp.stopa))
+check("n_kandidatu je počet PŘED filtrem", _odp.stopa["n_kandidatu"] == 1,
+      str(_odp.stopa))
+core.config.ANSWER_MIN_RERANK = _puv_prah
+
+check("stopa dojde až do db.add_message (webová cesta /dotaz)",
+      any(m.get("stopa") and m["stopa"].get("max_rerank") == 0.987
+          for m in _msgs if m["role"] == "assistant"),
+      str([m.get("stopa") for m in _msgs]))
+
+print("== záznam z kanálů bez vlákna (Telegram, MCP) ==")
+
+KANALY.clear()
+_pocet_pred = len(_msgs)
+core.zaznamenej("telegram", "dotaz z mobilu", _answer("x", [HIT]), [HIT])
+check("zaznamenej uloží otázku i odpověď", len(_msgs) - _pocet_pred == 2,
+      "%d nových" % (len(_msgs) - _pocet_pred))
+check("obojí jde do téhož denního vlákna kanálu",
+      len(KANALY) == 1 and KANALY[0][0] == "telegram", str(KANALY))
+check("odpověď nese citace i stopu",
+      _msgs[-1]["citations"] and _msgs[-1]["stopa"], str(_msgs[-1])[:160])
+
+_pocet_pred = len(_msgs)
+core.zaznamenej("telegram", "dotaz, co spadl", None, chyba="RuntimeError('x')")
+check("selhaná odpověď se uloží taky, ne že zmizí",
+      len(_msgs) - _pocet_pred == 2 and "Dotaz selhal" in _msgs[-1]["content"],
+      _msgs[-1]["content"][:80])
+
+# NEJDŮLEŽITĚJŠÍ CHECK CELÉ ZMĚNY. Telegram do 2026-08-24 odpovídal bez
+# databáze úplně; kdyby ho zápis mohl shodit, byl by výpadek Postgresu
+# k nerozeznání od nefunkčního bota. Auditní stopa se smí ztratit, odpověď ne.
+def _rozbita_db(*a, **kw):
+    raise RuntimeError("postgres je dole")
+
+
+_puv_kk, db.konverzace_kanalu = db.konverzace_kanalu, _rozbita_db
+_spadlo = False
+try:
+    core.zaznamenej("telegram", "dotaz pri rozbite DB", _answer("x", [HIT]), [HIT])
+except Exception:
+    _spadlo = True
+db.konverzace_kanalu = _puv_kk
+check("rozbitá DB NESHODÍ zaznamenej (odpověď se doručí i tak)", not _spadlo)
+
+_tg_sent.clear()
+KANALY.clear()
+_puv_token2 = core.config.TELEGRAM_BOT_TOKEN
+_puv_id2 = core.config.TELEGRAM_ALLOWED_USER_ID
+core.config.TELEGRAM_BOT_TOKEN = "token"
+core.config.TELEGRAM_ALLOWED_USER_ID = 819345451
+_pocet_pred = len(_msgs)
+telegram._handle_message({"from": {"id": 819345451}, "chat": {"id": 819345451},
+                          "text": "kolik mam poznamek"})
+check("Telegram dotaz se OPRAVDU uloží (dřív se neukládal vůbec)",
+      len(_msgs) - _pocet_pred == 2 and KANALY and KANALY[0][0] == "telegram",
+      "%d novych, kanaly=%s" % (len(_msgs) - _pocet_pred, KANALY))
+check("uživateli pořád odejde odpověď",
+      len(_tg_sent) == 1 and "Odpověď s citací" in _tg_sent[0][1]["text"],
+      str(_tg_sent))
+core.config.TELEGRAM_BOT_TOKEN = _puv_token2
+core.config.TELEGRAM_ALLOWED_USER_ID = _puv_id2
 
 print("== XSS / escaping ==")
 _msgs.clear()

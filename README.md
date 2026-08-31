@@ -196,6 +196,68 @@ zdroj a Postgres je derivovaný index — udělej z markdownu git repozitář
 a odklop ho jinam, než na tomhle začneš skutečně pracovat. To je nejlevnější
 možná pojistka: obnovujeme git, index se regeneruje.
 
-**Není eval loop.** Bez něj nezjistíš, jestli změna chunkingu nebo vah RRF
-pomohla. Ve fázi 2 přidej Langfuse datasety s ~50 ručně anotovanými dotazy
-a měř context recall — u second brainu je retrieval kvalita ten produkt.
+**Eval loop — od 2026-08-24 existuje, jinak než plánoval tenhle odstavec.**
+Původně tu stálo „ve fázi 2 přidej Langfuse datasety s ~50 anotovanými
+dotazy". Když na to došlo, ukázalo se, že Langfuse by zavřel nejmenší část
+problému za největší cenu:
+
+- Trace LLM volání už máš — `LiteLLM_SpendLogs` nese alias, skutečný model,
+  tokeny, cenu, `request_duration_ms` i `status`. Celá P8 se z těch dat dá
+  přečíst jedním `GROUP BY`; chyběl pohled, ne úložiště.
+- `turn_off_message_logging: true` je zapnuté schválně, takže by Langfuse
+  dostal metadata bez promptů a odpovědí — a bez obsahu neuděláš ani
+  datasety, ani LLM-as-judge, ani anotace. Zapnout obsah znamená pustit
+  deník do ClickHouse a blob storage, které nekryje `19-kryton-backup.sh`.
+- Callback z LiteLLM navíc nevidí to, co bolí: P4 a P7-B jsou chyby
+  rozhodnutí PŘED voláním modelu (kolik chunků prošlo prahem, jaké bylo
+  max rerank skóre). Dostat je do Langfuse znamená instrumentovat
+  `retrieval-service` a `core.py` jeho SDK — tedy napsat týž kód, kterým to
+  zapíšeš do vlastního Postgresu, plus závislost.
+
+Místo toho:
+
+| co | čím |
+|---|---|
+| stopa u každé odpovědi | `message.n_kandidatu`, `n_nad_prahem`, `max_rerank`, `odmitnuto`, `fallback` — plní `core.answer()` |
+| denní pohled a alerty | `scripts/31-denni-report.py` |
+| regresní sada | `eval/zlata-sada.json` + `scripts/32-zlata-sada.py` |
+
+Langfuse tím není zamítnutý, jen odložený za data. Až bude v `message` pár
+set záznamů, dá se vrátit ke konkrétní otázce „chci annotation queue
+a experiment UI?" — což je něco jiného než plán napsaný ve chvíli, kdy
+systém neměl ani jeden záznam.
+
+## Provozní dohled a regrese
+
+Tři věci, které vznikly z toho, že P4, P7-B a P8 jsou shodně chyby, které
+v textu odpovědi vidět NEJSOU.
+
+**Stopa u odpovědi.** `core.answer()` vrací `Odpoved(text, model, ms, stopa)`
+a stopa jde do `message`. Zapisují ji všechny tři cesty — web, Telegram
+i MCP. Telegram do 2026-08-24 nezapisoval vůbec nic, takže jediná denně
+používaná cesta byla na aplikační úrovni neviditelná; zapisuje se přes
+`core.zaznamenej()`, které **nikdy nevyhodí výjimku**, aby výpadek Postgresu
+neudělal z bota mlčícího bota.
+
+**Denní report.**
+
+    /root/deploy/scripts/31-denni-report.py            # posledních 24 h
+    /root/deploy/scripts/31-denni-report.py --hodin 96 # zpětně
+
+Pět alertů (fallback, podíl odmítnutí, návrat `:free` tarifu, latence,
+klíče bez rozpočtu), návratový kód 1 když něco pípne. Ověřeno proti
+historickým datům: na okně od 2026-08-06 vypíše celou P8 i P6 včetně
+`workhorse` s maximem 742 822 ms.
+
+**Zlatá sada.**
+
+    /root/deploy/scripts/32-zlata-sada.py                  # běh a diff
+    /root/deploy/scripts/32-zlata-sada.py --uloz-baseline   # schválit stav
+
+Dvacet otázek na čtyřech osách (faktografická, temporální, mimo korpus,
+agregační). Nepočítá jedno skóre — agregát by P4 i P7-B schoval. Hlásí
+chybu jen při ZHORŠENÍ proti `eval/baseline.json`, protože sada schválně
+obsahuje položky, o kterých víme, že dneska selhávají. Sada, která je
+červená od prvního dne, se přestane spouštět: přesně to se stalo checku na
+`ANSWER_MAX_TOKENS` v `13-smoke-kryton.py`, který byl po commitu `214fee3`
+šest dní červený, aniž si toho kdo všiml.

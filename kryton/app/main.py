@@ -269,11 +269,12 @@ def ask(query: str = Form(...), conversation_id: str = Form(None),
 
         res = core.search(q, rewrite=bool(rewrite))
         hits = res["results"]
-        text, model, ms = core.answer(q, hits, prior=prior, extra=extra)
+        odp = core.answer(q, hits, prior=prior, extra=extra)
         cits = [{"source_path": h["source_path"], "heading_path": h.get("heading_path"),
                  "chunk_id": h["chunk_id"], "rerank_score": h.get("rerank_score")}
                 for h in hits]
-        db.add_message(cid, "assistant", text, cits, model, ms)
+        db.add_message(cid, "assistant", odp.text, cits, odp.model, odp.ms,
+                       stopa=odp.stopa)
     except Exception as e:
         log.exception("dotaz selhal")
         db.add_message(cid, "assistant", f"Dotaz selhal: {e}")

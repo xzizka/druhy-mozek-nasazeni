@@ -1,0 +1,174 @@
+{
+  "verze": 1,
+  "popis": "Zlatá sada pro regresní kontrolu odpovědní cesty. Spouští ji scripts/32-zlata-sada.py.",
+  "jak_se_udrzuje": [
+    "Položka se přidává, když se najde chyba — ne dopředu. Každý řádek tady",
+    "má odpovídat něčemu, co se aspoň jednou pokazilo, nebo co se v POZADAVKY.md",
+    "sleduje jako otevřený požadavek. Sada bez příběhu za každou položkou",
+    "zestárne do balastu, který nikdo neopraví ani nesmaže.",
+    "",
+    "Faktografické položky (osa 'faktograficka') jsou převzaté ze",
+    "scripts/28-rerank-value-denik.py, kde jsou cílové dokumenty určené",
+    "ČETBOU záznamů, ne odhadem. Otázky jsou schválně psané tak, aby se",
+    "s textem záznamu lexikálně překrývaly co nejmíň — tedy režim, kde má",
+    "reranker pomáhat a kde selhání pozná i malá sada.",
+    "",
+    "Očekávané zdroje jsou vázané na konkrétní deníkové dny. Až se ty",
+    "záznamy jednou smažou nebo přepíšou, položky je potřeba zahodit,",
+    "ne 'opravit' přepsáním očekávání — jinak sada přestane měřit.",
+    "",
+    "Odhad ceny jednoho běhu: 20 dotazů = 20 volání aliasu reasoning",
+    "+ 20 přepisů přes cheap, tedy řádově jednotky desetin centu.",
+    "Doba běhu zhruba tři až pět minut (rerank je ~4 s na dotaz)."
+  ],
+  "polozky": [
+    {
+      "id": "denik-zamestnani",
+      "dotaz": "Bál jsem se, že přijdu o zaměstnání?",
+      "osa": "faktograficka",
+      "musi_najit": true,
+      "ocekavane_zdroje": ["denik/2026-08-10.md"]
+    },
+    {
+      "id": "denik-starosta",
+      "dotaz": "Co mi napsal starosta zpátky?",
+      "osa": "faktograficka",
+      "musi_najit": true,
+      "ocekavane_zdroje": ["denik/2026-08-11.md"]
+    },
+    {
+      "id": "denik-zatmeni",
+      "dotaz": "Kdy bylo vidět zatmění Slunce?",
+      "osa": "faktograficka",
+      "musi_najit": true,
+      "ocekavane_zdroje": ["denik/2026-08-12.md"]
+    },
+    {
+      "id": "denik-n8n",
+      "dotaz": "Na co jsem napojil n8n?",
+      "osa": "faktograficka",
+      "musi_najit": true,
+      "ocekavane_zdroje": ["denik/2026-08-12.md"],
+      "poznamka": "Tenhle záznam je zároveň jediné místo, kde je zdokumentovaný virtual key `n8n` v LiteLLM. V repu není."
+    },
+    {
+      "id": "denik-sitove-politiky",
+      "dotaz": "Kvůli které komponentě byly špatně nastavené síťové politiky?",
+      "osa": "faktograficka",
+      "musi_najit": true,
+      "ocekavane_zdroje": ["denik/2026-08-13.md"]
+    },
+    {
+      "id": "denik-oracle",
+      "dotaz": "Jak se instaluje Oracle 26?",
+      "osa": "faktograficka",
+      "musi_najit": true,
+      "ocekavane_zdroje": ["denik/2026-08-14.md"]
+    },
+    {
+      "id": "denik-syn",
+      "dotaz": "Co mě zaskočilo na mém synovi?",
+      "osa": "faktograficka",
+      "musi_najit": true,
+      "ocekavane_zdroje": ["denik/2026-08-15.md"]
+    },
+    {
+      "id": "denik-nespavost",
+      "dotaz": "Proč jsem v noci nemohl usnout?",
+      "osa": "faktograficka",
+      "musi_najit": true,
+      "ocekavane_zdroje": ["denik/2026-08-17.md"]
+    },
+    {
+      "id": "denik-filenet",
+      "dotaz": "Co potřebuje Filenet, aby běžel v Kubernetes?",
+      "osa": "faktograficka",
+      "musi_najit": true,
+      "ocekavane_zdroje": ["denik/2026-08-17.md"]
+    },
+    {
+      "id": "denik-pomaly",
+      "dotaz": "Kdy mi vytkli, že jsem pomalý?",
+      "osa": "faktograficka",
+      "musi_najit": true,
+      "ocekavane_zdroje": ["denik/2026-08-18.md"]
+    },
+    {
+      "id": "denik-bojovat",
+      "dotaz": "Co obnáší bojovat za nějakou věc?",
+      "osa": "faktograficka",
+      "musi_najit": true,
+      "ocekavane_zdroje": ["denik/2026-08-16.md", "denik/2026-08-10.md"],
+      "poznamka": "Legitimně odpovídají dva záznamy, stačí kterýkoliv."
+    },
+    {
+      "id": "upload-zastupitelstvo",
+      "dotaz": "Čeho se týká moje žádost zastupitelstvu obce?",
+      "osa": "faktograficka",
+      "musi_najit": true,
+      "ocekavane_zdroje": ["_uploads/broumy-zastupitelstvo-zadost-6c0932c1.md"],
+      "poznamka": "Jediná položka mimo deník — kryje cestu z P2 (nahraný dokument v indexu)."
+    },
+    {
+      "id": "denik-nastroj",
+      "dotaz": "Jaký nástroj mi pomohl najít problém v práci?",
+      "osa": "faktograficka",
+      "musi_najit": true,
+      "ocekavane_zdroje": ["denik/2026-08-13.md"]
+    },
+    {
+      "id": "denik-rozvoj-obce",
+      "dotaz": "Co jsem si zapsal o rozvoji obce, kde bydlím?",
+      "osa": "faktograficka",
+      "musi_najit": true,
+      "ocekavane_zdroje": ["denik/2026-08-10.md"]
+    },
+
+    {
+      "id": "temporalni-vcera",
+      "dotaz": "Co jsem si zapsal včera?",
+      "osa": "temporalni",
+      "musi_najit": true,
+      "znamy_problem": "P7-B",
+      "poznamka": "Očekává se SELHÁNÍ, dokud není opravené P7-B. Ověřeno 2026-08-19 živě: nejlepší rerank skóre 0,0215 proti prahu ANSWER_MIN_RERANK 0,1, tedy o řád níž, takže neprojde ani jeden chunk. Deník i index jsou přitom v pořádku. Až tahle položka zezelená, je P7-B hotové."
+    },
+    {
+      "id": "temporalni-posledni",
+      "dotaz": "Jaké jsou moje poslední tři zápisky?",
+      "osa": "temporalni",
+      "musi_najit": true,
+      "znamy_problem": "P7-B"
+    },
+    {
+      "id": "temporalni-tyden",
+      "dotaz": "Co jsem řešil minulý týden?",
+      "osa": "temporalni",
+      "musi_najit": true,
+      "znamy_problem": "P7-B"
+    },
+
+    {
+      "id": "mimo-korpus-island",
+      "dotaz": "Co jsem si zapsal o své cestě na Island?",
+      "osa": "mimo-korpus",
+      "musi_najit": false,
+      "poznamka": "Past na P4. Otázka VYPADÁ jako deníková, takže retrieval nějaké chunky vrátí — ale odpověď v nich není. Správné chování je přiznat, že se nic nenašlo, ne uvařit odpověď a připsat jí citaci. Ověřeno 2026-08-24: slovo 'Island' není v korpusu ani jednou."
+    },
+    {
+      "id": "mimo-korpus-hypoteka",
+      "dotaz": "Jakou hypotéku mám sjednanou a u které banky?",
+      "osa": "mimo-korpus",
+      "musi_najit": false,
+      "poznamka": "Druhá past na P4, jiného typu: konkrétní faktografický dotaz na osobní údaj, který v poznámkách není. Ověřeno 2026-08-24: 'hypotek' není v korpusu ani jednou."
+    },
+
+    {
+      "id": "agregacni-pocty",
+      "dotaz": "Kolik mám v poznámkách celkem dokumentů?",
+      "osa": "agregacni",
+      "musi_najit": true,
+      "musi_obsahovat_stat": "documents",
+      "poznamka": "P1a. Číslo se ZÁMĚRNĚ neuvádí natvrdo — korpus roste o deníkový záznam denně a pevná hodnota by sadu rozbila do týdne. Runner si aktuální počet vytáhne z /stats retrievalu a čeká ho v odpovědi. Přesně tuhle cestu P1a zavádí: fakta o korpusu se přikládají do promptu, aby si model počty nedopočítával z úryvků."
+    }
+  ]
+}
