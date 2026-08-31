@@ -1411,9 +1411,11 @@ a fabrikace), NASAZENI.md past č. 6 (práva na markdown).
 
 ## P14 — Odkud přišel ZÁPIS poznámky se nikde neukládá, dotaz na "první záznam z kanálu" je nezodpovědatelný
 
-**Stav: OPRAVENO V KÓDU (2026-08-31), NENASAZENO, NECOMMITNUTO.** Nalezeno
-tím, že se uživatel Krytona zeptal „Kdy jsem vložil do paměti první záznam
-z telegramu?" a dostal „V poznámkách jsem k tomu nic nenašel."
+**Stav: HOTOVO A NASAZENO (2026-08-31), OVĚŘENO ŽIVĚ.** Nalezeno tím, že se
+uživatel Krytona zeptal „Kdy jsem vložil do paměti první záznam z
+telegramu?" a dostal „V poznámkách jsem k tomu nic nenašel." Smoke test
+(175/175) po prvním nasazení prošel, ale živé ověření odhalilo, že
+odpověď se nezměnila — druhá chyba, popsaná a opravená níž téhož dne.
 
 ### Co se stalo a proč to selhává viditelně (mechanismus P7/P4)
 
@@ -1523,20 +1525,58 @@ databázi na brainu (SQL syntakticky odpovídá existujícímu vzoru
 `conversation.kanal`, ale nespuštěno naostro), a `scripts/
 13-smoke-kryton.py` jako celek (potřebuje `fastmcp`, které tu není k mání).
 
+### Chyba nalezená ŽIVÝM ověřením po prvním nasazení (2026-08-31, tentýž den)
+
+Smoke test (175/175) prošel, ale živé zavolání `core.answer()` s přesně
+uživatelovým dotazem na brainu vrátilo pořád **„V poznámkách jsem k tomu
+nic nenašel"** — beze změny. Příčina: `facts = corpus_facts() +
+kanal_facts()` se počítalo AŽ ZA touhle podmínkou:
+
+```python
+if not ctx and not extra:
+    return Odpoved("V poznámkách jsem k tomu nic nenašel.", ...)
+```
+
+Dotaz na „první záznam z telegramu" má skoro nulové rerank skóre (stejný
+podpis jako zbytek P14/P7-B), takže `ctx` vyjde prázdné a funkce se vrátí
+o řádek výš — `kanal_facts()` se nikdy nestihne spočítat, natož poslat
+modelu. Stejná mezera platí odjakživa i pro `corpus_facts()`, jen se
+zatím neprojevila, protože agregační dotazy typicky nějaký kontext dostanou.
+
+**Oprava:** `kanal_facts()` se teď počítá PŘED tímhle rozhodnutím a při
+`je_agregacni(query) == True` se vlévá do `extra` — stejného pole, kterým
+P1b posílá SQL fakta a které do rozhodnutí „mám co odpovědět" už počítá.
+Rozdíl oproti P1b: dělá se to přímo v `core.answer()`, ne v `main.py`,
+takže z toho těží i Telegram a MCP — P1b sám dodnes ne, protože `extra`
+tam nastavuje jen web route (`main.py:262-265`), zapsáno jako otevřená
+věc níž.
+
+**Ověřeno znovu živě po opravě:** `core.answer("Kdy jsem vlozil do pameti
+prvni zaznam z telegramu?", ...)` teď skutečně zavolá model s
+`kanal_facts()` v kontextu (dřív `n_nad_prahem: 0` a `model: ""` bez
+volání). Kontrolní běh nad BĚŽNÝM temporálním dotazem bez agregačního
+slova (`"Co jsem dělal včera?"`) potvrdil, že bezpečnostní vlastnost
+P4/P7 (žádné volání modelu bez skutečného kontextu) zůstala nedotčená.
+
 ### Otevřené věci
 
 1. **Google Keep (`app/keep.py`) obchází `core.capture()`/`inbox` úplně**
    — píše markdown přímo a volá `core.trigger_reindex()` „bez DB a bez
    síťových závislostí core" (vlastní komentář v kódu). Keepové zápisy se
    proto v `inbox.kanal` nikdy neobjeví. Samostatná mezera, nezadáno.
+1b. **P1b (SQL fakta pro agregační dotazy) funguje jen z webu**, protože
+   `extra` nastavuje jen `main.py:262-265`, ne `core.answer()` samo. Nalezeno
+   při opravě výš — `kanal_facts()` teď Telegramu a MCP funguje, ale
+   analytická SQL cesta z P1b jim pořád chybí. Nezadáno, ale sedí vedle P14.
 2. **Historii nejde dopočítat.** Zápisy před 2026-08-31 mají `kanal='web'`
    jen proto, že je to default ALTERu — ne proto, že by web byl skutečný
    zdroj. `kanal_facts()` na to upozorňuje v textu, ale číslo pro „web"
    před tímhle datem je ve skutečnosti „neznámo".
-3. **Nenasazeno.** Migrace i kód jsou v pracovní kopii, ne na brainu, ne
-   v gitu — čeká na rozhodnutí, jestli/kdy commitovat a nasadit vedle
-   necommitnutého dohledu a zlaté sady (viz `dohled-a-zlata-sada`), který
-   `conversation.kanal` už zavedl pro dotazovou větev.
+3. ~~Nenasazeno~~ — **nasazeno 2026-08-31** společně s dohledem a zlatou
+   sadou (`conversation.kanal`, stopa, denní report) v jednom commitu.
+   Migrace `inbox.kanal`/`conversation.kanal` ověřena přímo v `psql` na
+   brainu, smoke test 175/175 v izolovaném kontejneru, živý dotaz uživatele
+   ověřen po opravě chyby popsané výš.
 
 Souvisí: P7 (temporální dotazy, stejný rerank-práh mechanismus), P4 (práh
 `ANSWER_MIN_RERANK`), P1 (`corpus_facts()`/P1b vzor), NASAZENI.md

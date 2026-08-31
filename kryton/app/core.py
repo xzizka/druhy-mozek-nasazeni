@@ -399,13 +399,26 @@ def answer(query: str, hits: list[dict], prior: list[dict] | None = None,
         + (f" — {h['heading_path']}" if h.get("heading_path") else "")
         + f"\n{h['content']}"
         for i, h in enumerate(hits))
+    if je_agregacni(query):
+        # P14 oprava (nalezená až živým ověřením po prvním nasazení):
+        # `kanal_facts()` počítané až NÍŽ by na dotaz „kdy jsem vložil první
+        # záznam z telegramu" nikdy nedoběhlo — ten dotaz má skoro nulové
+        # rerank skóre (žádná poznámka o sobě netvrdí, že je první svého
+        # kanálu), takže `ctx` vyjde prázdné a funkce by se vrátila o řádek
+        # níž, DŘÍV, než se fakta o kanálech vůbec spočítají. Řešení je
+        # stejné jako u P1b: vlít je do `extra`, který se do rozhodnutí
+        # počítá — a udělat to TADY, ne v každém volajícím zvlášť (P1b to
+        # dělá jen v `main.py`, takže Telegram a MCP z něj dodnes nic nemají).
+        kf = kanal_facts()
+        if kf:
+            extra = (extra + "\n" if extra else "") + kf
     if not ctx and not extra:
         return Odpoved("V poznámkách jsem k tomu nic nenašel.", "", 0,
                        _stopa(kandidatu, 0, nejlepsi, True, False))
 
     msgs = [{"role": "system", "content": SYSTEM}]
     msgs += history_messages(prior)
-    facts = corpus_facts() + kanal_facts()
+    facts = corpus_facts()
     uryvky = f"Úryvky z poznámek:\n\n{ctx}\n\n" if ctx else ""
     msgs.append({"role": "user",
                  "content": dnesni_datum()
