@@ -137,13 +137,17 @@ def main() -> None:
                coalesce(round(avg(latency_ms))::text, ''),
                coalesce(round(max(latency_ms))::text, ''),
                coalesce(round(avg(max_rerank)::numeric, 4)::text, ''),
-               count(*) FILTER (WHERE odmitnuto IS NULL)
+               count(*) FILTER (WHERE odmitnuto IS NULL),
+               count(*) FILTER (WHERE denik_dni IS NOT NULL),
+               count(*) FILTER (WHERE odseknuto)
         FROM message
         WHERE role = 'assistant' AND created_at > now() - interval '%s'
     """ % okno)[0]
-    celkem, odmitnuto, fallbacku, lat_avg, lat_max, rer_avg, bez_stopy = (
+    (celkem, odmitnuto, fallbacku, lat_avg, lat_max, rer_avg, bez_stopy,
+     denikovych, odseknutych) = (
         cislo(souhrn[0]), cislo(souhrn[1]), cislo(souhrn[2]),
-        souhrn[3] or "-", souhrn[4] or "-", souhrn[5] or "-", cislo(souhrn[6]))
+        souhrn[3] or "-", souhrn[4] or "-", souhrn[5] or "-", cislo(souhrn[6]),
+        cislo(souhrn[7]), cislo(souhrn[8]))
 
     print("\nOdpovědi Krytona (web + Telegram + MCP)")
     print("  celkem            %d" % celkem)
@@ -152,6 +156,12 @@ def main() -> None:
     print("  propad na fallback %d" % fallbacku)
     print("  latence ø / max   %s / %s ms" % (lat_avg, lat_max))
     print("  ø max_rerank      %s" % rer_avg)
+    # P15. Podíl deníkových je zároveň kontrola falešných pozitivů heuristiky:
+    # když deníkovou cestou jde většina dotazů, chytá `je_denikovy_prehled()`
+    # i běžné faktografické dotazy a ředí je zápisy z deníku.
+    print("  deníkovou cestou  %d%s" % (
+        denikovych, "  (%.0f %%)" % (100.0 * denikovych / celkem) if celkem else ""))
+    print("  odseknuto na stropu %d" % odseknutych)
     if bez_stopy:
         print("  bez stopy         %d  (zápis z doby před 2026-08-24 nebo selhaná odpověď)"
               % bez_stopy)
@@ -275,6 +285,24 @@ def main() -> None:
         elif cislo(spend) > 0.8 * cislo(budget, 1e9):
             alerty.append("A5 KLÍČE: `%s` utratil %s z rozpočtu %s (nad 80 %%)."
                           % (alias, spend, budget))
+
+    # A6 — odseknutá odpověď (P15). Uživatel varování v textu odpovědi vidí,
+    # ale jen u toho jednoho dotazu; opakované odsekávání znamená, že je
+    # špatně nastavený strop nebo že pokyn k formátu v deníkovém bloku
+    # nefunguje, a to se pozná jedině souhrnem.
+    odseknute = dotaz("kryton", """
+        SELECT coalesce(denik_dni::text, '-'), count(*), max(length(content))
+        FROM message
+        WHERE odseknuto AND created_at > now() - interval '%s'
+        GROUP BY 1
+        ORDER BY 2 DESC
+    """ % okno)
+    for dni, n, znaku in odseknute:
+        alerty.append("A6 ODSEKNUTÍ: %sx odpověď narazila na strop tokenů "
+                      "(deníkové období %s dnů, nejdelší %s znaků). Zužte "
+                      "období, nebo zvyšte DENIK_ANSWER_MAX_TOKENS — ale "
+                      "POZOR, strop platí i pro gemmu ve fallbacku (P8)."
+                      % (n, dni, znaku))
 
     print("\n" + "=" * 70)
     if not alerty:

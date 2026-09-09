@@ -145,11 +145,27 @@ def logout():
     return r
 
 
+# P15: rozbalovátko období deníku. Prázdná hodnota = „podle dotazu", tedy
+# heuristika `core.je_denikovy_prehled()` + `core.obdobi_z_dotazu()`; `0` je
+# výslovné vypnutí. Ty dva stavy nejde slít — bez nuly by nešlo heuristiku
+# přebít, když netrefí. Stejný seznam se používá u obou formulářů.
+DENIK_VOLBY = """<label>deník
+<select name="denik_dni" style="width:auto">
+<option value="">podle dotazu</option>
+<option value="0">nepoužít</option>
+<option value="30">30 dní</option>
+<option value="90">90 dní</option>
+<option value="365">rok</option>
+<option value="1825">vše</option>
+</select></label>"""
+
+
 ASK = """<form method="post" action="/dotaz">
 <p><textarea name="query" rows="3" autofocus
  placeholder="Na co se chceš zeptat svých poznámek?"></textarea></p>
 <div class="row"><button>Zeptat se</button>
-<label><input type="checkbox" name="rewrite" value="1" checked style="width:auto"> přepis dotazu přes LLM</label></div>
+<label><input type="checkbox" name="rewrite" value="1" checked style="width:auto"> přepis dotazu přes LLM</label>
+""" + DENIK_VOLBY + """</div>
 </form>
 {% if convs %}<h2>Poslední konverzace</h2><ul>
 {% for c in convs %}<li><a href="/konverzace/{{ c.id }}">{{ c.title or "(bez názvu)" }}</a>
@@ -218,7 +234,8 @@ všech dokumentů.</p>{% endif %}
 <form method="post" action="/dotaz"><input type="hidden" name="conversation_id" value="{{ cid }}">
 <p><textarea name="query" rows="2" placeholder="Doplňující dotaz…"></textarea></p>
 <div class="row"><button>Zeptat se</button>
-<label><input type="checkbox" name="rewrite" value="1" checked style="width:auto"> přepis dotazu přes LLM</label></div>
+<label><input type="checkbox" name="rewrite" value="1" checked style="width:auto"> přepis dotazu přes LLM</label>
+""" + DENIK_VOLBY + """</div>
 </form>
 <form method="post" action="/konverzace/smazat" style="margin-top:2rem" """ + SMAZAT + """>
 <input type="hidden" name="conversation_id" value="{{ cid }}">
@@ -243,7 +260,8 @@ def conversation(cid: str, kryton_session: str = Cookie(None)):
 
 @app.post("/dotaz")
 def ask(query: str = Form(...), conversation_id: str = Form(None),
-        rewrite: str = Form(None), kryton_session: str = Cookie(None)):
+        rewrite: str = Form(None), denik_dni: str = Form(None),
+        kryton_session: str = Cookie(None)):
     if not logged_in(kryton_session):
         return RedirectResponse("/prihlasit", status_code=303)
     q = query.strip()
@@ -267,9 +285,19 @@ def ask(query: str = Form(...), conversation_id: str = Form(None),
                 db.add_metric(cid, q, res_an["sql"], res_an["cols"],
                               res_an["rows"], res_an["fingerprint"])
 
+        # P15: prázdné pole i nečitelná hodnota znamenají „podle dotazu"
+        # (None), ne vypnuto (0) — chybný vstup z formuláře nesmí tiše
+        # zapnout ani vypnout celou cestu, má nechat výchozí chování.
+        try:
+            dni = int(denik_dni) if (denik_dni or "").strip() else None
+        except ValueError:
+            log.warning("neplatna hodnota denik_dni %r, jedu podle dotazu",
+                        denik_dni)
+            dni = None
+
         res = core.search(q, rewrite=bool(rewrite))
         hits = res["results"]
-        odp = core.answer(q, hits, prior=prior, extra=extra)
+        odp = core.answer(q, hits, prior=prior, extra=extra, denik_dni=dni)
         cits = [{"source_path": h["source_path"], "heading_path": h.get("heading_path"),
                  "chunk_id": h["chunk_id"], "rerank_score": h.get("rerank_score")}
                 for h in hits]

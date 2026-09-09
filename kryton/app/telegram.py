@@ -22,11 +22,18 @@ otevřenými dveřmi do poznámek pro kohokoliv, kdo ho na Telegramu najde.
 ROZLIŠENÍ PŘÍKAZ/ODPOVĚĎ beze klasifikace záměru z obsahu: zpráva, která je
 Telegram-reply na zprávu OD BOTA, je „odpověď" -> `core.capture()`. Čerstvá
 zpráva bez reply je „příkaz/dotaz" -> `core.search()` + `core.answer()`.
+
+P15 (2026-09-09) k tomu přidává dvě věci, obě navěšené na reply gesto
+a na příkaz, ne na klasifikaci obsahu — tedy stejnou logikou jako výš:
+`_otazka_dne_z_reply()` vytáhne z `reply_to_message` otázku dne a předá ji
+`core.capture(otazka=)`, a `/denik [N] <dotaz>` vynutí odpověď nad celým
+deníkem za N dnů.
 """
 from __future__ import annotations
 
 import logging
 import random
+import re
 import threading
 import time
 from datetime import datetime, timezone
@@ -136,6 +143,47 @@ def _je_odpoved_na_bota(msg: dict) -> bool:
     return bool(rep and rep.get("from", {}).get("is_bot"))
 
 
+def _otazka_dne_z_reply(msg: dict) -> str | None:
+    """Text otázky dne, na kterou tahle zpráva odpovídá. Jinak None. (P15)
+
+    BERE SE Z GESTA, NE Z PAMĚTI PROCESU, a to je celý vtip: `reply_to_message`
+    nese plné tělo zprávy, na kterou uživatel swipnul, takže otázku známe
+    přesně — i když odpoví na otázku ze včerejška, i po restartu kontejneru.
+    Pamatovat si „co jsem naposled poslal" (jako `_posledni_odeslano`) by
+    obojí zkazilo, a `random.choice()` ze šesti variant znamená, že špatný
+    odhad by přiřadil odpovědi CIZÍ otázku — horší než žádnou.
+
+    Prefix se kontroluje proto, že reply na bota může být i reply na
+    obyčejnou Krytonovu ODPOVĚĎ. Tam žádná otázka dne není a vrací se None,
+    takže se do deníku nic nepřilepí.
+    """
+    rep = msg.get("reply_to_message") or {}
+    t = (rep.get("text") or "").strip()
+    if t.startswith(OTAZKA_DNE_PREFIX):
+        return t[len(OTAZKA_DNE_PREFIX):].strip() or None
+    return None
+
+
+# `/denik`, `/denik 90`, `/denik@mujbot 90` — Telegram u příkazů v grupách
+# připojuje `@jmeno_bota`, takže se to musí připustit i u soukromého chatu.
+_DENIK_PRIKAZ = re.compile(r"^/denik(?:@\w+)?(?:\s+(\d{1,4}))?\b\s*", re.I)
+
+
+def _rozborem_prikazu(text: str) -> tuple[str, int | None]:
+    """`(dotaz, denik_dni)` z textu zprávy. (P15)
+
+    `denik_dni` je `None`, když příkaz nepadl — tedy „rozhodni heuristikou",
+    což je přesně ta trojice stavů, kterou popisuje `core.answer()`.
+    Explicitní cesta existuje proto, že heuristika nad volným textem měří
+    formulaci, ne chování; tady se nehádá nic.
+    """
+    m = _DENIK_PRIKAZ.match(text)
+    if not m:
+        return text, None
+    dni = int(m.group(1)) if m.group(1) else config.DENIK_DEFAULT_DNI
+    return text[m.end():].strip(), dni
+
+
 def _stahni_soubor(file_id: str) -> bytes:
     """Stáhne soubor z Telegramu podle file_id.
 
@@ -197,14 +245,25 @@ def _handle_message(msg: dict) -> None:
         return
 
     if _je_odpoved_na_bota(msg):
-        rel = core.capture(text, kanal="telegram")
-        log.info("telegram: zaznamenano do %s (%d znaku)", rel, len(text))
+        otazka = _otazka_dne_z_reply(msg)
+        rel = core.capture(text, kanal="telegram", otazka=otazka)
+        log.info("telegram: zaznamenano do %s (%d znaku, otazka dne: %s)",
+                 rel, len(text), "ano" if otazka else "ne")
         _send(chat_id, "Zaznamenáno: %s" % rel)
         return
 
+    # P15: `/denik [N] otázka` vynutí deníkovou cestu na N dnů. Bez příkazu
+    # zůstává `denik_dni=None`, tedy „rozhodni heuristikou" — příkaz je
+    # jistota pro případ, kdy heuristika netrefí, ne povinnost.
+    dotaz, denik_dni = _rozborem_prikazu(text)
+    if denik_dni is not None and not dotaz:
+        _send(chat_id, "Napiš i otázku, třeba: /denik 90 jaký je sentiment "
+                       "mých zápisů?")
+        return
+
     try:
-        res = core.search(text)
-        odp = core.answer(text, res["results"])
+        res = core.search(dotaz)
+        odp = core.answer(dotaz, res["results"], denik_dni=denik_dni)
     except Exception as e:
         # Text výjimky se uživateli NEPOSÍLÁ. Detail patří do logu (kam ho
         # dá `log.exception` i s tracebackem), do chatu patří srozumitelná
@@ -220,6 +279,10 @@ def _handle_message(msg: dict) -> None:
     # Telegram API — a naopak `zaznamenej()` nikdy nevyhodí výjimku, takže
     # rozbitá databáze nezabrání odeslání. Ani jedna z těch dvou věcí nesmí
     # shodit tu druhou.
+    #
+    # Ukládá se `text`, ne `dotaz`: do auditní stopy patří to, co uživatel
+    # SKUTEČNĚ napsal, včetně `/denik 90`. Použité období se neztratí, jde
+    # do stopy jako `denik_dni`.
     core.zaznamenej("telegram", text, odp, res["results"])
     _send(chat_id, odp.text)
 
@@ -269,6 +332,12 @@ DENNI_OTAZKY = [
     "Co bys chtěl/a mít zapsané, kdyby sis zítra na dnešek nevzpomněl/a?",
 ]
 
+# Prefix zprávy s otázkou dne. JE TO SOUČÁST KONTRAKTU, ne kosmetika:
+# `_otazka_dne_z_reply()` podle něj pozná, že uživatel odpověděl na otázku
+# dne, a ne na obyčejnou Krytonovu odpověď. Kdo ho změní, musí počítat s tím,
+# že u zpráv odeslaných PŘED změnou se otázka k odpovědi už nepřipojí.
+OTAZKA_DNE_PREFIX = "🗓️ Otázka dne: "
+
 _posledni_odeslano = [None]  # datetime.date | None; jen v pameti, viz docstring poll_loop
 
 
@@ -279,7 +348,7 @@ def _mel_bych_poslat_otazku(now: datetime) -> bool:
 
 
 def _posli_otazku_dne() -> None:
-    text = "🗓️ Otázka dne: %s" % random.choice(DENNI_OTAZKY)
+    text = OTAZKA_DNE_PREFIX + random.choice(DENNI_OTAZKY)
     _send(config.TELEGRAM_ALLOWED_USER_ID, text)
     _posledni_odeslano[0] = datetime.now(timezone.utc).date()
     log.info("telegram: otazka dne odeslana")

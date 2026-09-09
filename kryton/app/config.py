@@ -85,6 +85,58 @@ CONTEXT_CHUNKS = int(os.environ.get("CONTEXT_CHUNKS", "8"))
 # nemá jak vzniknout — 2 skóre z 84. Po nárůstu korpusu pusť skript znovu.
 ANSWER_MIN_RERANK = float(os.environ.get("ANSWER_MIN_RERANK", "0.1"))
 
+# ---------------------------------------------------------------------------
+# Dotazy nad deníkem jako celkem (P15): sentiment, nálada, trend
+# ---------------------------------------------------------------------------
+# Proč to nejde přes retrieval: dotaz „jaký je sentiment mých zápisů" je
+# o MNOŽINĚ zápisů, ne o jejich obsahu. Žádný zápis o sobě netvrdí, že je
+# odpověď na otázku dne, ani v něm neleží slovo „sentiment", takže není na co
+# se sémanticky zachytit — změřeno 0,0000727 nejlepšího rerank skóre, tedy
+# 1400x pod ANSWER_MIN_RERANK, a `answer()` vrátí pevnou větu BEZ volání
+# modelu. Týž mechanismus jako P7-B, jen nad deníkem místo nad korpusem.
+#
+# Deníkové soubory se jmenují `denik/RRRR-MM-DD.md`, takže rozsah datumů je
+# filtr na JMÉNO SOUBORU — proti metadatové cestě navržené v P7-B tady není
+# potřeba žádné SQL. Čte se z disku, ne z indexu: disk je autoritativní zdroj
+# a dnešní zápis na něm je HNED, zatímco index dobíhá až reindexem.
+DENIK_DIR = os.environ.get("DENIK_DIR", "denik")
+
+# Výchozí období, když ho dotaz neurčí. 30 dnů volil uživatel 2026-09-09.
+DENIK_DEFAULT_DNI = int(os.environ.get("DENIK_DEFAULT_DNI", "30"))
+
+# Strop na období, které jde vyžádat („vše", „za posledních 9999 dní").
+# 5 let je víc, než deník existuje; jde o ochranu proti nesmyslnému vstupu,
+# ne o věcnou hranici. Skutečnou hranici drží DENIK_CONTEXT_CHARS níž.
+DENIK_MAX_DNI = int(os.environ.get("DENIK_MAX_DNI", "1825"))
+
+# Do kolika dnů se smí odpovídat den po dni. Nad tím se v bloku vynucuje
+# souhrn po týdnech nebo měsících.
+#
+# ZMĚŘENO 2026-09-09, a je to tvrdý limit, ne estetika: tabulka sentimentu
+# den po dni stojí ~70 VÝSTUPNÍCH tokenů na den. 29 dnů narazilo na
+# `finish_reason=length` při completion_tokens=2000. Bez tohohle přepínače
+# se odpověď na delší období odsekne uprostřed tabulky.
+DENIK_DETAIL_MAX_DNI = int(os.environ.get("DENIK_DETAIL_MAX_DNI", "30"))
+
+# Strop na znaky deníku vlité do promptu. 60 000 je asi rok při dnešní
+# hustotě (29 dnů = 5 650 znaků = 2 241 tokenů promptu, $0,000083).
+# Při překročení se uříznou NEJSTARŠÍ dny a napíše se to do bloku — tichým
+# uříznutím by model odpovídal o jiném období, než o jaké byl požádán.
+DENIK_CONTEXT_CHARS = int(os.environ.get("DENIK_CONTEXT_CHARS", "60000"))
+
+# Strop na výstupní tokeny JEN pro deníkové dotazy. ANSWER_MAX_TOKENS=2000
+# výš na tabulku za 30 dnů nestačí (viz DENIK_DETAIL_MAX_DNI).
+#
+# ZÁMĚRNĚ SAMOSTATNÁ HODNOTA, ne zvýšení ANSWER_MAX_TOKENS: to bylo 2026-08-18
+# SNÍŽENO z 8000 na 2000 jako přímá oprava P8, kde gemma dostala strop šitý
+# pro big-pickle, mlela 743 s a vyrobila 24 000 znaků nesmyslu.
+#
+# PŘIJATÉ RIZIKO: při propadu `reasoning -> workhorse` se těch 4000 aplikuje
+# i na gemmu, tedy zmenšená verze P8. Přijato proto, že tatáž změna zavádí
+# detekci odseknutí (`stopa["odseknuto"]`, alert A6) a Telegram posílá jednu
+# zprávu do TELEGRAM_MAX_ZNAKU — dosah je řádově menší a je VIDĚT.
+DENIK_ANSWER_MAX_TOKENS = int(os.environ.get("DENIK_ANSWER_MAX_TOKENS", "4000"))
+
 # Kolik předchozích zpráv konverzace přiložit k doplňujícímu dotazu.
 # 6 = tři dvojice otázka/odpověď. Strop je tu proto, že odpovědi bývají
 # dlouhé a bez něj by kontext rostl každým tahem, až by přerostl

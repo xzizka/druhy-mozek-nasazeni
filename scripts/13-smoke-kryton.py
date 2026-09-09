@@ -117,13 +117,15 @@ core.search = lambda q, limit=None, rewrite=None, **kw: (
     SEEN.__setitem__("rewrite", rewrite), {"results": [HIT]})[1]
 
 
-def _answer(q, hits, prior=None, extra=""):
+def _answer(q, hits, prior=None, extra="", denik_dni=None):
     SEEN["prior"] = prior
     SEEN["extra"] = extra
+    SEEN["denik_dni"] = denik_dni
     return core.Odpoved("Odpověď s citací [1].", "reasoning", 1234,
                         {"n_kandidatu": 1, "n_nad_prahem": 1,
                          "max_rerank": 0.987, "odmitnuto": False,
-                         "fallback": False})
+                         "fallback": False, "odseknuto": False,
+                         "denik_dni": denik_dni})
 
 
 _PUVODNI_ANSWER = core.answer
@@ -390,6 +392,15 @@ core.corpus_stats = lambda: STATS
 # červený, aniž si toho kdo všiml — nic ho totiž nespouští automaticky.
 check("ANSWER_MAX_TOKENS snížený na 2000 (P8 bod b, krok 3)",
       core.config.ANSWER_MAX_TOKENS == 2000, str(core.config.ANSWER_MAX_TOKENS))
+
+# P15: strop pro deníkové dotazy je ZÁMĚRNĚ jiný. Kdyby někdo „uklidil" tu
+# duplicitu tím, že by zvýšil ANSWER_MAX_TOKENS a DENIK_* zrušil, otevřel by
+# znovu P8 — gemma ve fallbacku dostane strop z requestu bez ohledu na to,
+# kdo ho poslal. Check hlídá, že ta dvě čísla zůstanou oddělená.
+check("DENIK_ANSWER_MAX_TOKENS je vyšší než ANSWER_MAX_TOKENS a oddělený (P15)",
+      core.config.DENIK_ANSWER_MAX_TOKENS > core.config.ANSWER_MAX_TOKENS,
+      "%s vs %s" % (core.config.DENIK_ANSWER_MAX_TOKENS,
+                    core.config.ANSWER_MAX_TOKENS))
 
 print("== P1a: rozpoznání agregačních dotazů ==")
 for q in ["Kolik je kterých knih?",
@@ -862,6 +873,46 @@ soubory = list(Path(MD, "denik").glob("*.md")) if Path(MD, "denik").exists() els
 check("zaznamenaný text se opravdu zapsal na disk",
       any(ZNACKA in f.read_text(encoding="utf-8") for f in soubory), str(soubory))
 
+# P15: otázka dne se bere z `reply_to_message`, tedy z GESTA, ne z paměti
+# procesu. Kdyby se pamatovalo „co jsem naposled poslal", přiřadila by se
+# odpovědi na starší otázku otázka CIZÍ — `random.choice()` ze šesti variant
+# znamená, že špatný odhad je horší než žádný.
+_tg_sent.clear()
+OTAZKA = "Co tě dnes nejvíc zaskočilo nebo tě přinutilo změnit názor?"
+ZNACKA_Q = "TELEGRAM-ODPOVED-NA-OTAZKU-DNE-4c1a"
+telegram._handle_message(
+    {"from": {"id": 819345451}, "chat": {"id": 819345451}, "text": ZNACKA_Q,
+     "reply_to_message": {"from": {"is_bot": True},
+                          "text": telegram.OTAZKA_DNE_PREFIX + OTAZKA}})
+_denik_txt = "\n".join(f.read_text(encoding="utf-8")
+                       for f in Path(MD, "denik").glob("*.md"))
+check("otázka dne se z reply zapíše do hlavičky denního bloku (P15)",
+      ("otázka dne: " + OTAZKA) in _denik_txt and ZNACKA_Q in _denik_txt,
+      _denik_txt[-300:])
+
+# A obráceně: reply na obyčejnou Krytonovu ODPOVĚĎ žádnou otázku dne nenese.
+# Bez téhle kontroly by se do deníku lepil kus předchozí odpovědi jako otázka.
+_tg_sent.clear()
+ZNACKA_BEZ = "TELEGRAM-REPLY-NA-ODPOVED-9e2b"
+telegram._handle_message(
+    {"from": {"id": 819345451}, "chat": {"id": 819345451}, "text": ZNACKA_BEZ,
+     "reply_to_message": {"from": {"is_bot": True},
+                          "text": "Podle zápisu z 8. 9. jsi řešil networkpolicy."}})
+_blok = [b for b in "\n".join(
+    f.read_text(encoding="utf-8") for f in Path(MD, "denik").glob("*.md")
+).split("## ") if ZNACKA_BEZ in b]
+check("reply na běžnou odpověď bota otázku dne NEPŘIPOJÍ (P15)",
+      len(_blok) == 1 and "otázka dne" not in _blok[0], str(_blok))
+
+check("/denik 90 vytáhne období i dotaz (P15)",
+      telegram._rozborem_prikazu("/denik 90 jaký je sentiment?")
+      == ("jaký je sentiment?", 90))
+check("/denik bez čísla vezme DENIK_DEFAULT_DNI (P15)",
+      telegram._rozborem_prikazu("/denik jaká byla nálada?")
+      == ("jaká byla nálada?", core.config.DENIK_DEFAULT_DNI))
+check("dotaz bez příkazu nechá rozhodnutí heuristice (None, ne 0) (P15)",
+      telegram._rozborem_prikazu("jaký je sentiment?") == ("jaký je sentiment?", None))
+
 _tg_sent.clear()
 telegram._handle_message({"from": {"id": 819345451}, "chat": {"id": 819345451},
                           "text": "čerstvý dotaz bez reply"})
@@ -907,6 +958,120 @@ check("stopa dojde až do db.add_message (webová cesta /dotaz)",
       any(m.get("stopa") and m["stopa"].get("max_rerank") == 0.987
           for m in _msgs if m["role"] == "assistant"),
       str([m.get("stopa") for m in _msgs]))
+
+print("== P15: deník jako celek (sentiment, nálada, trend) ==")
+
+check("heuristika chytne původní dotaz, který 2026-09-09 selhal",
+      core.je_denikovy_prehled("Projdi moje záznamy na každodenní otázky "
+                               "a zjisti sentiment odpovědí. Jak působí?"))
+check("heuristika chytne i P7-B dotaz na poslední záznamy",
+      core.je_denikovy_prehled("Jaké jsou poslední záznamy v deníku?"))
+# Negativní kontrola je u P15 důležitější než pozitivní: falešný poplach
+# vlije do KAŽDÉHO promptu dva tisíce tokenů deníku a zředí faktografické
+# odpovědi. Falešně negativní nález jen vrátí chování před P15.
+for _q in ["Jaké maintenance_work_mem se použilo při stavbě indexu?",
+           "Jak jsem řešil networkpolicy v Istio?",
+           "Co je to halfvec?"]:
+    check("heuristika NEchytne faktografický dotaz: %s" % _q[:38],
+          not core.je_denikovy_prehled(_q))
+
+# Past naměřená 2026-09-09: „ledn" je uvnitř „POSLEDNí", takže „za poslední
+# rok" vracelo LEDEN, a „zari" je na začátku „ZAŘÍdil". Obojí zasáhlo
+# nejběžnější formulace, ne okrajové případy — proto kontrola natvrdo.
+_od, _do = core.obdobi_z_dotazu("nálada za poslední rok")
+check("„za poslední rok“ je 365 dnů, ne leden (past „posLEDNí“)",
+      (_do - _od).days + 1 == 365, "%s..%s" % (_od, _do))
+_od, _do = core.obdobi_z_dotazu("jak jsem zařídil server, sentiment zápisů")
+check("„zařídil“ nespustí září (past „ZAŘÍdil“)",
+      (_do - _od).days + 1 == core.config.DENIK_DEFAULT_DNI, "%s..%s" % (_od, _do))
+_od, _do = core.obdobi_z_dotazu("sentiment za červenec")
+check("„za červenec“ je červenec, ne červen", (_od.month, _do.month) == (7, 7),
+      "%s..%s" % (_od, _do))
+_od, _do = core.obdobi_z_dotazu("jaký je sentiment mých zápisů?")
+check("bez určení období je default DENIK_DEFAULT_DNI",
+      (_do - _od).days + 1 == core.config.DENIK_DEFAULT_DNI, "%s..%s" % (_od, _do))
+
+_dnes = date.today()
+_blok = core.denik_kontext(_dnes, _dnes)
+check("denik_kontext načte dnešní zápis z DISKU (ne z indexu)",
+      ZNACKA_Q in _blok and "[%s]" % _dnes.isoformat() in _blok, _blok[:200])
+check("blok říká období nahlas a zakazuje číselné citace",
+      _dnes.isoformat() in _blok and "[1]" in _blok and "nepoužívej" in _blok)
+check("prázdný rozsah vrátí \"\", aby falešný poplach neobešel práh",
+      core.denik_kontext(date(2020, 1, 1), date(2020, 1, 31)) == "")
+
+# Volá se `_PUVODNI_ANSWER`, ne `core.answer` — ten je od řádku ~132
+# přebitý stubem, který o deníku nic neví a vrátil by `denik_dni: None`
+# u všeho. Stejný důvod jako v sekci o stopě výš.
+#
+# Zbytek P15 se bez volání modelu otestovat nedá: neprázdné `extra` je
+# PRÁVĚ ta větev, která do LiteLLM jde. Podvrhne se proto httpx.post — jinak
+# by nešlo ověřit ani strop tokenů, ani detekci odseknutí, tedy dvě věci,
+# které se tichým regresem nejlíp schovají.
+_puv_post, _zachyceno, _fin = core.httpx.post, {}, ["stop"]
+
+
+class _FakeR:
+    status_code = 200
+
+    def json(self):
+        return {"model": "reasoning",
+                "choices": [{"message": {"content": "Odpověď modelu."},
+                             "finish_reason": _fin[0]}]}
+
+
+def _fake_post(url, headers=None, json=None, timeout=None):
+    _zachyceno.clear()
+    _zachyceno.update(json)
+    return _FakeR()
+
+
+core.httpx.post = _fake_post
+_puv_prah2 = core.config.ANSWER_MIN_RERANK
+core.config.ANSWER_MIN_RERANK = 0.1
+_SUM = {"chunk_id": "c9", "source_path": "keep/postgres.md", "content": "šum",
+        "rerank_score": 0.00007, "heading_path": None}
+try:
+    # Regresní kotva celého P15: tenhle dotaz nad tímhle šumem vracel
+    # „V poznámkách jsem k tomu nic nenašel" BEZ volání modelu (message
+    # id 68, max_rerank 7,3e-05, latency 0 ms).
+    _o = _PUVODNI_ANSWER("Jaký je sentiment mých zápisů?", [dict(_SUM)])
+    check("deníkový dotaz nad samým šumem UŽ NEODMÍTNE (P15, jádro)",
+          not _o.stopa["odmitnuto"] and _o.stopa["denik_dni"], str(_o.stopa))
+    check("deník se dostal do promptu, ne mezi úryvky",
+          "Deníkové zápisy uživatele" in _zachyceno["messages"][-1]["content"])
+    check("deníkový dotaz dostane DENIK_ANSWER_MAX_TOKENS",
+          _zachyceno["max_tokens"] == core.config.DENIK_ANSWER_MAX_TOKENS,
+          str(_zachyceno.get("max_tokens")))
+
+    _o = _PUVODNI_ANSWER("Jaké maintenance_work_mem?", [dict(_SUM)])
+    check("faktografický dotaz nad šumem odmítne dál (P4/P7-B beze změny)",
+          _o.stopa["odmitnuto"] and _o.stopa["denik_dni"] is None, str(_o.stopa))
+
+    _o = _PUVODNI_ANSWER("Jaký je sentiment mých zápisů?", [dict(_SUM)], denik_dni=0)
+    check("denik_dni=0 deník VYPNE, i když heuristika chytá",
+          _o.stopa["odmitnuto"] and _o.stopa["denik_dni"] is None, str(_o.stopa))
+
+    _o = _PUVODNI_ANSWER("Co mě zaměstnávalo?", [dict(_SUM)], denik_dni=7)
+    check("denik_dni=7 deník ZAPNE, i když v dotazu žádné deníkové slovo není",
+          _o.stopa["denik_dni"] == 7, str(_o.stopa))
+    check("běžný dotaz drží ANSWER_MAX_TOKENS",
+          _PUVODNI_ANSWER("Co je halfvec?", [dict(_SUM, rerank_score=0.9)])
+          and _zachyceno["max_tokens"] == core.config.ANSWER_MAX_TOKENS,
+          str(_zachyceno.get("max_tokens")))
+
+    # Odseknutí: do P15 se NEPRÁZDNÁ odpověď na stropu vracela jako hotová.
+    _fin[0] = "length"
+    _o = _PUVODNI_ANSWER("Jaký je sentiment mých zápisů?", [dict(_SUM)])
+    check("finish_reason=length se pozná a napíše do odpovědi (P15)",
+          _o.stopa["odseknuto"] and "odseknutá" in _o.text, _o.text[-80:])
+    _fin[0] = "stop"
+    _o = _PUVODNI_ANSWER("Jaký je sentiment mých zápisů?", [dict(_SUM)])
+    check("dokončená odpověď se jako odseknutá NEoznačí",
+          not _o.stopa["odseknuto"] and "odseknutá" not in _o.text, _o.text)
+finally:
+    core.httpx.post = _puv_post
+    core.config.ANSWER_MIN_RERANK = _puv_prah2
 
 print("== záznam z kanálů bez vlákna (Telegram, MCP) ==")
 

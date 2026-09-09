@@ -1584,6 +1584,191 @@ Souvisí: P7 (temporální dotazy, stejný rerank-práh mechanismus), P4 (práh
 
 ---
 
+## P15 — Dotazy nad deníkem jako celkem (sentiment, nálada, trend) jsou nezodpovědatelné
+
+**Stav: ZADÁNO A REALIZOVÁNO 2026-09-09.** Nalezeno tím, že se uživatel
+Krytona zeptal „Projdi moje záznamy na každodenní otázky a zjisti sentiment
+odpovědí. Jak působí?" a dostal „V poznámkách jsem k tomu nic nenašel."
+
+### Diagnóza: model se vůbec nezavolal
+
+Stopa u té odpovědi (`message` id 68, konverzace `fa9656d7`, kanál web)
+říká celý mechanismus:
+
+| pole | hodnota |
+|---|---|
+| `n_kandidatu` | 8 |
+| `n_nad_prahem` | **0** |
+| `max_rerank` | **0,0000727** |
+| `odmitnuto` | `t` |
+| `latency_ms` | **0** |
+| `model` | prázdné |
+
+`latency_ms = 0` a prázdný `model` znamenají, že se LiteLLM nedotklo.
+`ANSWER_MIN_RERANK = 0.1`, nejlepší skóre 7,3e-05 — **cca 1400× pod prahem**,
+takže `dost_relevantni()` zahodila všech 8 chunků a `answer()` spadl do pevné
+věty. **Není to chybějící schopnost modelu, je to nedoručený kontext.**
+
+Ověřeno protikladem: celý deník (29 souborů, 5 650 znaků) poslaný napřímo
+na alias `reasoning` se stejným systémovým promptem vrátil tabulku sentimentu
+den po dni i trend. Schopnost tedy je celá.
+
+### Proč je rerank skóre tak nízké (a proč to není nová chyba)
+
+Retrieval řadí podle podobnosti chunku k textu dotazu. **Žádný deníkový
+zápis o sobě netvrdí, že je „odpověď na otázku dne", ani v něm neleží slovo
+„sentiment"** — není na co se sémanticky zachytit. Co retrieval na ten dotaz
+skutečně vrátil: 6 z 8 chunků byly Keep poznámky o monitoringu Postgresu
+a blogy o SQL Serveru; deníkové byly jen dva.
+
+Je to **týž podpis jako P7-B** (změřeno 2026-08-19: „Jaké jsou poslední
+záznamy v deníku?" → nejlepší skóre 0,0013, a byla to nahraná žádost).
+Dotaz je o MNOŽINĚ zápisů, ne o jejich obsahu.
+
+Nezachytí to ani `je_agregacni()` — `AGREGACNI_SLOVA` má
+*kolik/počet/nejvíc/seřaď/první*, nic jako „projdi", „sentiment", „jak
+působí". Takže nepadne ani odkaz na `/korpus`.
+
+A i po snížení prahu by to nestačilo: `RERANK_TOP_K=10`, ale deník má
+**34 chunků ve 29 dokumentech**. Top-K podle relevance na dotaz nad celou
+množinou strukturálně odpovědět nemůže — táž kategorie jako P1 (agregace
+nad korpusem), jen nad deníkem.
+
+### Rozhodující číslo: deník se vejde celý
+
+| | hodnota |
+|---|---|
+| deník na disku | 6 103 B / 29 dnů / 33 zápisů |
+| slepený text | 5 650 znaků |
+| **prompt** | **2 241 tokenů** ($0,000083) |
+| cena dotazu | $0,00042 |
+
+Pro tuhle třídu dotazů **není retrieval potřeba vůbec**. Řešení je proto
+metadatová cesta, na kterou ukazuje už P7-B — jen jednodušší, než tam bylo
+navrženo: deníkové soubory se jmenují `denik/RRRR-MM-DD.md`, takže **rozsah
+datumů je filtr na jméno souboru.** Žádné SQL nad `retrieval.document`.
+
+### Řešení
+
+**1. Kam se to zapojuje: `extra` UVNITŘ `answer()`.**
+`answer()` má už dnes zámek `if not ctx and not extra`, takže neprázdné
+`extra` obchází rerankový práh úplně — `ANSWER_MIN_RERANK` se nesahá a dál
+dělá svou práci pro P4. Je to týž šev, kterým tečou ověřená čísla z P1b
+a `kanal_facts()` z P14.
+
+Udělané **v `answer()`, ne v callerech**, a to je poučení přímo z P14:
+`extra` se plní jen v `main.py`, takže Telegram a MCP z P1b dodnes nemají
+nic. Deníkový blok dostanou všichni tři.
+
+**2. Data z DISKU, ne z indexu.** Tři důvody: disk je autoritativní zdroj
+(viz docstring `safe_path()`), **dnešní zápis je na disku hned** (index
+dobíhá reindexem a u dotazu „jak mi bylo poslední měsíc" je vynechání
+dneška to nejhorší selhání), a nezávisí to na běžícím retrievalu.
+
+**3. Kdy se to spustí — dvě nezávislé cesty.**
+- *Explicitní, deterministická:* rozbalovátko období na webu, `/denik [N]`
+  v Telegramu. Nic se nehádá.
+- *Heuristika `je_denikovy_prehled()`:* vlastní seznam slov, **ne** rozšíření
+  `AGREGACNI_SLOVA` — ta dvě slova dělají různou práci (jedno zobrazí odkaz
+  na `/korpus`, druhé vlije 2 000 tokenů do promptu) a slití by zaneslo
+  falešné pozitivy do obou. Vždy přes `_ascii()`, protože P7 naměřil, že
+  „delal vcera" a „dělal včera" daly jiné #1.
+
+**Selhává to otevřeným směrem, a to je hlavní argument pro heuristiku:**
+falešně negativní = přesně dnešní chování, žádná regrese; falešně pozitivní
+= 2 000 tokenů navíc za $0,0001. Táž úvaha, jakou má v docstringu
+`je_agregacni()`.
+
+**4. Období: default 30 dnů, rozšiřitelné.** Parsuje se v pořadí: explicitní
+počet (`posledních 60 dní`, `za poslední 3 měsíce`, `půl roku`) → pojmenovaný
+měsíc nebo `letos` → default. Pár regexů nad `_ascii(query)`, žádná knihovna
+na přirozený čas.
+
+**Období se říká nahlas v promptu**, včetně toho, kolik dnů v rozsahu
+reálně má zápis. Jinak model tiše zobecní z 12 zápisů na „tvůj rok" — táž
+obrana, jakou má `kanal_facts()` u výchozí hodnoty migrace.
+
+**5. Rozpočet: vstup není problém, výstup je.** Změřeno na živém
+`reasoning`: 29 dnů deníku = 2 241 tokenů promptu, ale odpověď narazila na
+`finish_reason: length` při `completion_tokens: 2000` — **tabulka den po dni
+stojí ~70 výstupních tokenů na den, takže `ANSWER_MAX_TOKENS=2000` nepokryje
+ani výchozí měsíc.**
+
+- `DENIK_ANSWER_MAX_TOKENS = 4000` se použije **jen pro tuhle třídu dotazů**,
+  nikdy globálně. Globální zvýšení otevírá P8 (gemma dostala 8 000 tokenů
+  volnosti, mlela 743 s a vyrobila 24 000 znaků).
+- Formát řídí délka období, textem v bloku: do `DENIK_DETAIL_MAX_DNI` (30)
+  smí den po dni, nad to se vynucuje souhrn po týdnech či měsících.
+- `DENIK_CONTEXT_CHARS = 60000` (asi rok při dnešní hustotě). Při překročení
+  se uříznou **nejstarší** dny a **napíše se to do bloku**, ne mlčky.
+
+**POZOR, přijaté riziko:** `DENIK_ANSWER_MAX_TOKENS` se při propadu
+`reasoning → workhorse` aplikuje i na gemmu, tedy zmenšená verze P8. Přijato
+proto, že právě tahle změna zavádí detekci odseknutí (bod 6) a Telegram
+posílá jednu zprávu do 1 024 znaků — dosah je řádově menší než původní
+incident a je vidět.
+
+**6. Odseknutí musí být vidět na všech třech místech.** Odseknutá tabulka,
+která končí u 20. srpna, vypadá jako hotová odpověď — kategorie „věrohodný
+nesmysl je horší než přiznané selhání".
+
+| místo | stav před | opraveno |
+|---|---|---|
+| LiteLLM `finish_reason=length` | `answer()` ošetřoval **jen prázdný** content | při neprázdném contentu se přilepí varování, `stopa["odseknuto"]`, sloupec `message.odseknuto`, alert **A6** v denním reportu |
+| Telegram `TELEGRAM_MAX_ZNAKU=1024` | `_zkrat()` značku i log měl | u deníkových dotazů se v bloku vynucuje krátký formát |
+| `DENIK_CONTEXT_CHARS` | neexistoval | uříznutí nejstarších dnů se hlásí v bloku |
+
+**7. Citace datem, ne číslem.** Zápisy z `extra` nejsou `hits`, takže se
+v UI mezi citacemi neobjeví, a s prázdným `ctx` nemá model co číslovat —
+zopakoval by se P7-A, kde si na blok s datem vymyslel `[0]`. Blok proto
+zápisy značí datem (`[2026-09-08]`) a jednou větou říká, ať cituje datem.
+
+**8. Otázka dne se ukládá k odpovědi.** `DENNI_OTAZKY` má 6 variant vybíraných
+`random.choice()` a text otázky se dosud **nikde neukládal** — do deníku padla
+jen odpověď. „Sentiment odpovědí na otázky dne" tak šel zodpovědět jen
+v souhrnu; odpověď se nedala spárovat s otázkou, která ji vyvolala.
+
+Řešení **nepotřebuje žádný stav ani migraci**: text otázky nese
+`reply_to_message.text` samotného Telegram-reply gesta. Bere se odtud, ne
+z paměti procesu — takže funguje i pro odpověď na starší otázku a správně
+vrátí `None` u odpovědi na obyčejnou Krytonovu odpověď (rozlišuje se
+prefixem `🗓️ Otázka dne: `). `capture(otazka=...)` ji pak zapíše do hlavičky
+denního bloku (`## HH:MM — otázka dne: …`), tedy do markdownu, který je
+autoritativní zdroj a jde i do indexu a do promptu.
+
+Zpětně to dohnat nešlo — proto se to dělalo hned, ne až s ostatním.
+
+### Co se změnilo
+
+| soubor | co |
+|---|---|
+| `kryton/app/config.py` | `DENIK_DIR`, `DENIK_DEFAULT_DNI`, `DENIK_MAX_DNI`, `DENIK_DETAIL_MAX_DNI`, `DENIK_CONTEXT_CHARS`, `DENIK_ANSWER_MAX_TOKENS` |
+| `kryton/app/core.py` | `je_denikovy_prehled()`, `obdobi_z_dotazu()`, `denik_kontext()`, `answer(denik_dni=)`, detekce odseknutí, `capture(otazka=)` |
+| `kryton/app/telegram.py` | `OTAZKA_DNE_PREFIX`, `_otazka_dne_z_reply()`, příkaz `/denik [N]` |
+| `kryton/app/main.py` | rozbalovátko období u obou dotazových formulářů |
+| `kryton/app/db.py` | `message.odseknuto`, `message.denik_dni` (idempotentní ALTER) |
+| `scripts/31-denni-report.py` | alert **A6 ODSEKNUTÍ** |
+| `scripts/33-eval-denik-prehled.py` | měřicí skript |
+
+### Jak se to ověřuje
+
+`scripts/33-eval-denik-prehled.py` tiskne **celé odpovědi** (metodické
+poučení z P4: detektor z klíčových slov nahlásil 1 ze 3, skutečnost byla
+2 ze 3) a u každého dotazu i rozpoznané období, prompt/completion tokeny
+a `finish_reason`.
+
+Nejdůležitější jsou **negativní kontroly** — dotazy, které se deníkovou
+cestou spustit NESMÍ (`maintenance_work_mem při stavbě indexu`, `jak jsem
+řešil networkpolicy v Istio`). Riziko téhle funkce není, že nezabere;
+je, že se bude spouštět na běžné faktografické dotazy a ředit je dvěma
+tisíci tokenů deníku.
+
+Souvisí: P7 (týž mechanismus, metadatová cesta odtud), P4 (práh
+`ANSWER_MIN_RERANK`), P1/P1b a P14 (vzor „ověřený podklad do `extra`"),
+P8 (`ANSWER_MAX_TOKENS` a zacyklení fallbacku).
+
+---
+
 ## K zamyšlení (nezadané, nezanalyzované — jen nápady)
 
 Volnější sekce než P1–P4: věci, které stojí za zvážení časem, ale ještě
