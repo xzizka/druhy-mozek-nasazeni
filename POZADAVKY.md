@@ -1732,9 +1732,23 @@ v souhrnu; odpověď se nedala spárovat s otázkou, která ji vyvolala.
 `reply_to_message.text` samotného Telegram-reply gesta. Bere se odtud, ne
 z paměti procesu — takže funguje i pro odpověď na starší otázku a správně
 vrátí `None` u odpovědi na obyčejnou Krytonovu odpověď (rozlišuje se
-prefixem `🗓️ Otázka dne: `). `capture(otazka=...)` ji pak zapíše do hlavičky
-denního bloku (`## HH:MM — otázka dne: …`), tedy do markdownu, který je
-autoritativní zdroj a jde i do indexu a do promptu.
+prefixem `🗓️ Otázka dne: `). `capture(otazka=...)` ji pak zapíše do markdownu,
+který je autoritativní zdroj a jde i do indexu a do promptu.
+
+**Do TĚLA bloku, ne do nadpisu `## HH:MM`** — rozmyšleno až po prvním
+nasazení, dokud takový zápis ještě žádný neexistoval. `heading_path` skládá
+chunker z ATX nadpisů, váží ho reranker a jde DOSLOVA do citací; šest
+generických otázek ze `DENNI_OTAZKY` opakovaných napříč všemi dny by ho
+zředilo o text, který o obsahu zápisu nic neříká, a z citace
+„2026-09-08 > 18:15" by udělalo stodvacetiznakový řádek. V těle je otázka
+pořád v obsahu chunku, takže ji model při odpovědi vidí — a to je všechno,
+co P15 potřebuje. Zápis vypadá takto:
+
+    ## 18:13
+
+    *Otázka dne: Co tě dnes nejvíc zaskočilo?*
+
+    Byl jsem na Pěkné…
 
 Zpětně to dohnat nešlo — proto se to dělalo hned, ne až s ostatním.
 

@@ -886,9 +886,14 @@ telegram._handle_message(
                           "text": telegram.OTAZKA_DNE_PREFIX + OTAZKA}})
 _denik_txt = "\n".join(f.read_text(encoding="utf-8")
                        for f in Path(MD, "denik").glob("*.md"))
-check("otázka dne se z reply zapíše do hlavičky denního bloku (P15)",
-      ("otázka dne: " + OTAZKA) in _denik_txt and ZNACKA_Q in _denik_txt,
+check("otázka dne se z reply zapíše do TĚLA denního bloku (P15)",
+      ("*Otázka dne: " + OTAZKA + "*") in _denik_txt and ZNACKA_Q in _denik_txt,
       _denik_txt[-300:])
+# Do nadpisu se dostat NESMÍ: `heading_path` váží reranker a jde doslova
+# do citací, takže šest generických otázek napříč všemi dny by ho zředilo.
+check("otázka dne NEJDE do nadpisu ## HH:MM (P15)",
+      not any(l.startswith("## ") and "tázka dne" in l
+              for l in _denik_txt.splitlines()), _denik_txt[-300:])
 
 # A obráceně: reply na obyčejnou Krytonovu ODPOVĚĎ žádnou otázku dne nenese.
 # Bez téhle kontroly by se do deníku lepil kus předchozí odpovědi jako otázka.
@@ -902,7 +907,7 @@ _blok = [b for b in "\n".join(
     f.read_text(encoding="utf-8") for f in Path(MD, "denik").glob("*.md")
 ).split("## ") if ZNACKA_BEZ in b]
 check("reply na běžnou odpověď bota otázku dne NEPŘIPOJÍ (P15)",
-      len(_blok) == 1 and "otázka dne" not in _blok[0], str(_blok))
+      len(_blok) == 1 and "tázka dne" not in _blok[0], str(_blok))
 
 check("/denik 90 vytáhne období i dotaz (P15)",
       telegram._rozborem_prikazu("/denik 90 jaký je sentiment?")

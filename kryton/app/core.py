@@ -846,7 +846,8 @@ def capture(text: str, title: str | None = None, kanal: str = "web",
 
     `otazka` (P15) je naopak otázka dne, na kterou tenhle zápis odpovídá,
     a ta DO MARKDOWNU PATŘÍ — na rozdíl od kanálu je vlastností právě toho
-    jednoho `## HH:MM` bloku, ne dokumentu. Do 2026-09-09 se neukládala
+    jednoho bloku, ne dokumentu. Píše se do TĚLA bloku, ne do nadpisu; proč,
+    viz komentář u zápisu níž. Do 2026-09-09 se neukládala
     nikde: `DENNI_OTAZKY` má šest variant vybíraných `random.choice()`
     a do deníku padla jen odpověď, takže „sentiment odpovědí na otázky dne"
     šel zodpovědět jen v souhrnu a odpověď se nedala spárovat s otázkou.
@@ -868,17 +869,28 @@ def capture(text: str, title: str | None = None, kanal: str = "web",
         p = safe_path(rel)
         p.parent.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%H:%M")
-        # `" ".join(split())` slije případné odřádkování do mezer: nadpis
-        # musí zůstat na JEDNOM řádku, jinak by z něj chunker udělal nadpis
-        # a k němu osamocený odstavec.
-        nadpis = f"## {stamp}"
+        # Otázka jde do TĚLA bloku, ne do nadpisu `## HH:MM`, a to je vědomé
+        # rozhodnutí: `heading_path` (chunker ho skládá z ATX nadpisů) váží
+        # reranker a zobrazuje se DOSLOVA v citacích. Šest generických otázek
+        # ze `DENNI_OTAZKY` opakovaných napříč všemi dny by ho zředilo o text,
+        # který o obsahu zápisu nic neříká, a z citace „2026-09-08 > 18:15"
+        # by udělalo stodvacetiznakový řádek.
+        #
+        # V těle je otázka pořád v obsahu chunku, takže ji model při odpovědi
+        # vidí — a to je všechno, co P15 potřebuje. Navíc se to lidsky lepší
+        # čte v repozitáři poznámek.
+        #
+        # `" ".join(split())` slije odřádkování do mezer, aby řádek s otázkou
+        # zůstal jeden odstavec.
+        blok = f"## {stamp}\n\n"
         if otazka:
-            nadpis += " — otázka dne: " + " ".join(otazka.split())
+            blok += "*Otázka dne: %s*\n\n" % " ".join(otazka.split())
+        blok += text.strip() + "\n"
         if p.exists():
-            p.write_text(p.read_text(encoding="utf-8").rstrip()
-                         + f"\n\n{nadpis}\n\n{text.strip()}\n", encoding="utf-8")
+            p.write_text(p.read_text(encoding="utf-8").rstrip() + f"\n\n{blok}",
+                         encoding="utf-8")
         else:
-            p.write_text(f"# {date.today().isoformat()}\n\n{nadpis}\n\n{text.strip()}\n",
+            p.write_text(f"# {date.today().isoformat()}\n\n{blok}",
                          encoding="utf-8")
     db.add_inbox(rel, text, kanal)
     trigger_reindex()
