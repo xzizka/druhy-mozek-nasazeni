@@ -150,7 +150,7 @@ def _otazka_dne_z_reply(msg: dict) -> str | None:
     nese plné tělo zprávy, na kterou uživatel swipnul, takže otázku známe
     přesně — i když odpoví na otázku ze včerejška, i po restartu kontejneru.
     Pamatovat si „co jsem naposled poslal" (jako `_posledni_odeslano`) by
-    obojí zkazilo, a `random.choice()` ze šesti variant znamená, že špatný
+    obojí zkazilo, a náhodný výběr z třiceti variant znamená, že špatný
     odhad by přiřadil odpovědi CIZÍ otázku — horší než žádnou.
 
     Prefix se kontroluje proto, že reply na bota může být i reply na
@@ -322,7 +322,29 @@ def poll_loop() -> None:
 # Malá rotující sada, ne LLM generování - jednoduché, bez ceny a latence
 # navíc. „Chytřejší" otázky (podle mezer v korpusu) jsou dalsí krok, az
 # tohle overi, ze samotne planovani ma smysl.
+#
+# ROZŠÍŘENO 2026-09-09 ze šesti na 31. Šest otázek při jedné denně znamená
+# každou pětkrát za měsíc; 31 dá přibližně měsíční rotaci.
+#
+# Co drží tvar téhle sady (ať se při dalším přidávání nerozpadne):
+#
+#   1. DVOJDÍLNÁ OTÁZKA. Za otázkou následuje pobídka, která tlačí za tu
+#      první samozřejmou odpověď („— a co by sis o tom chtěl/a pamatovat
+#      i za měsíc", „tobě, ne jen na papíře"). Bez ní vzniká jednořádková
+#      odpověď, ze které se za měsíc nic nevyčte.
+#   2. ODPOVĚĎ MÁ BÝT DOHLEDATELNÁ. Je to vstup do RAGu, ne nálada do
+#      šuplíku — otázky proto míří na konkrétní věci, jména, čísla
+#      a rozhodnutí, ne na obecné pocity. Několik otázek na stav a energii
+#      tu je záměrně (deník se takhle reálně používá, viz dotaz na
+#      sentiment z P15), ale i ty se ptají na „co se v tu chvíli dělo".
+#   3. TYKÁNÍ a rodově neutrální tvary („chtěl/a") — stejně jako
+#      v původní šestici.
+#
+# Sada je schválně tematicky pestrá, ale výběr je náhodný, takže rovnoměrné
+# pokrytí témat NEZARUČUJE. Kdyby to někdy vadilo, správný krok je rotace
+# po tématech, ne přidávání dalších otázek do jednoho pytle.
 DENNI_OTAZKY = [
+    # --- co se dnes povedlo, pokazilo, rozhodlo ------------------------
     "Co se ti dnes povedlo vyřešit nebo pochopit — a co by sis o tom "
     "chtěl/a pamatovat i za měsíc, až to vyprchá z hlavy?",
     "Co tě dnes nejvíc zaskočilo nebo tě přinutilo změnit názor?",
@@ -330,8 +352,76 @@ DENNI_OTAZKY = [
     "Jakou chybu jsi dnes udělal/a a co z ní plyne pro příště?",
     "Co jsi se dnes naučil/a nového — technicky, nebo o sobě?",
     "Co bys chtěl/a mít zapsané, kdyby sis zítra na dnešek nevzpomněl/a?",
+    "Jaké rozhodnutí jsi dnes udělal/a a co tě k němu přesvědčilo? Napiš "
+    "i to, co jsi zvažoval/a a nevybral/a.",
+    "Co ti dnes nefungovalo tak, jak jsi čekal/a — a čím se to nakonec "
+    "vysvětlilo?",
+    "Co dnes fungovalo na první pokus? Napiš proč, ať to umíš zopakovat.",
+    "Co bys dnes udělal/a jinak, kdybys ten den začínal/a znovu?",
+    "Co ses dnes dozvěděl/a o něčem, o čem sis myslel/a, že to už znáš?",
+    "Jaká otázka ti dnes zůstala nezodpovězená a koho nebo co by bylo "
+    "potřeba, abys ji zodpověděl/a?",
+
+    # --- čas, pozornost, odkládání -------------------------------------
+    "Na čem jsi dnes strávil/a nejvíc času — a stálo to za to?",
+    "Co jsi dnes odložil/a na jindy a proč zrovna tohle?",
+    "Na čem ti dnes doopravdy záleželo a kolik času jsi tomu dal/a? "
+    "Jestli se ta dvě čísla rozcházejí, napiš i to.",
+    "Co děláš pořád stejně, i když víš, že to nefunguje?",
+    "Co tě dnes zaujalo natolik, že jsi na to myslel/a i po práci?",
+    "Co jsi dnes viděl/a, přečetl/a nebo slyšel/a a chceš se k tomu vrátit? "
+    "Napiš i kde to najdeš.",
+
+    # --- lidé ----------------------------------------------------------
+    "S kým jsi dnes mluvil/a a co si z toho rozhovoru chceš pamatovat?",
+    "Řekl ti dnes někdo něco, co stojí za zapamatování — i kdyby jen "
+    "proto, že s tím nesouhlasíš?",
+    "Komu jsi dnes něco slíbil/a a do kdy to chceš splnit?",
+    "Udělal pro tebe dnes někdo něco, co si zaslouží nezapomenout?",
+    "Naštval tě dnes někdo? Napiš i to, co ho k tomu podle tebe vedlo — "
+    "za měsíc se to bude číst jinak.",
+    "Viděl/a jsi dnes někoho, kdo něco umí lépe než ty? Co konkrétního "
+    "sis z toho vzal/a?",
+
+    # --- stav, energie, tělo -------------------------------------------
+    "Co ti dnes sebralo nejvíc energie — byla to práce, nebo lidi kolem?",
+    "Co ti dnes energii naopak dodalo, i kdyby to byla maličkost?",
+    "Kdy ti bylo dnes nejlíp a co se v tu chvíli dělo?",
+    "Jak jsi dnes spal/a a poznal/a jsi to na sobě během dne?",
+    "Cítil/a jsi dnes něco, co se poslední dobou opakuje?",
+
+    # --- delší horizont a doložitelnost --------------------------------
+    "Co se od minulého měsíce změnilo tak, že by si toho tehdejší ty "
+    "nevšiml/a?",
+    "Stalo se dnes něco, co bys mohl/a později potřebovat doložit? Napiš "
+    "i podrobnosti, které se teď zdají nepodstatné — datum, kdo tam byl, "
+    "co přesně padlo.",
 ]
 
+# Index naposled poslané otázky. Jen v paměti, viz docstring `_vyber_otazku`.
+_posledni_otazka = [None]
+
+
+def _vyber_otazku() -> str:
+    """Náhodná otázka dne, ale nikdy dvakrát za sebou tatáž.
+
+    `random.choice()` sám o sobě může poslat tutéž otázku dva dny po sobě.
+    Při šesti otázkách to bylo 17 % dnů, což je jasně vidět; při třiceti
+    jsou to 3 %, ale opakování hned druhý den nepůsobí jako náhoda, nýbrž
+    jako porucha bota — a to je horší než ta nižší pravděpodobnost.
+
+    Stav žije JEN V PAMĚTI, stejně jako `_posledni_odeslano`: po restartu
+    se může jedno opakování protlačit, a to je u osobního bota levnější než
+    perzistence. Otázky se od P15 ukládají do deníku, takže historie
+    v markdownu existuje — čtení zpátky by ale svázalo plánovač s diskem
+    kvůli kosmetice, a za to to nestojí.
+    """
+    if len(DENNI_OTAZKY) < 2:
+        return DENNI_OTAZKY[0]
+    i = random.choice([j for j in range(len(DENNI_OTAZKY))
+                       if j != _posledni_otazka[0]])
+    _posledni_otazka[0] = i
+    return DENNI_OTAZKY[i]
 # Prefix zprávy s otázkou dne. JE TO SOUČÁST KONTRAKTU, ne kosmetika:
 # `_otazka_dne_z_reply()` podle něj pozná, že uživatel odpověděl na otázku
 # dne, a ne na obyčejnou Krytonovu odpověď. Kdo ho změní, musí počítat s tím,
@@ -348,7 +438,7 @@ def _mel_bych_poslat_otazku(now: datetime) -> bool:
 
 
 def _posli_otazku_dne() -> None:
-    text = OTAZKA_DNE_PREFIX + random.choice(DENNI_OTAZKY)
+    text = OTAZKA_DNE_PREFIX + _vyber_otazku()
     _send(config.TELEGRAM_ALLOWED_USER_ID, text)
     _posledni_odeslano[0] = datetime.now(timezone.utc).date()
     log.info("telegram: otazka dne odeslana")

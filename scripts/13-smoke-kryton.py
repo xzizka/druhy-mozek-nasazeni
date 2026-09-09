@@ -875,7 +875,7 @@ check("zaznamenaný text se opravdu zapsal na disk",
 
 # P15: otázka dne se bere z `reply_to_message`, tedy z GESTA, ne z paměti
 # procesu. Kdyby se pamatovalo „co jsem naposled poslal", přiřadila by se
-# odpovědi na starší otázku otázka CIZÍ — `random.choice()` ze šesti variant
+# odpovědi na starší otázku otázka CIZÍ — náhodný výběr z desítek variant
 # znamená, že špatný odhad je horší než žádný.
 _tg_sent.clear()
 OTAZKA = "Co tě dnes nejvíc zaskočilo nebo tě přinutilo změnit názor?"
@@ -939,6 +939,34 @@ check("stejný den podruhé se nepošle",
 check("další den po hodině X se pošle znovu",
       telegram._mel_bych_poslat_otazku(datetime(2026, 1, 2, 6, 0, tzinfo=timezone.utc)))
 telegram._posledni_odeslano[0] = None
+
+# Sada otázek: počet, unikátnost a délka. Délka je tu proto, že otázka jde
+# od P15 do těla denního bloku i do zprávy v Telegramu, kde platí
+# TELEGRAM_MAX_ZNAKU — dlouhá otázka by ukrojila z místa pro odpověď.
+check("otázek dne je aspoň 20 (rotace přibližně po měsíci)",
+      len(telegram.DENNI_OTAZKY) >= 20, str(len(telegram.DENNI_OTAZKY)))
+check("žádná otázka dne se v sadě neopakuje",
+      len(set(telegram.DENNI_OTAZKY)) == len(telegram.DENNI_OTAZKY),
+      "%d unikátních z %d" % (len(set(telegram.DENNI_OTAZKY)),
+                              len(telegram.DENNI_OTAZKY)))
+check("žádná otázka není delší než 200 znaků",
+      all(len(o) <= 200 for o in telegram.DENNI_OTAZKY),
+      str(max(len(o) for o in telegram.DENNI_OTAZKY)))
+check("prefix a nejdelší otázka se vejdou do TELEGRAM_MAX_ZNAKU",
+      len(telegram.OTAZKA_DNE_PREFIX) + max(len(o) for o in telegram.DENNI_OTAZKY)
+      < core.config.TELEGRAM_MAX_ZNAKU)
+
+# Tohle je vlastní důvod, proč `_vyber_otazku()` existuje: `random.choice()`
+# sám o sobě může poslat tutéž otázku dva dny po sobě, a opakování hned
+# druhý den nepůsobí jako náhoda, ale jako porucha bota.
+telegram._posledni_otazka[0] = None
+_serie = [telegram._vyber_otazku() for _ in range(300)]
+check("otázka dne nepřijde dvakrát za sebou (300 tahů)",
+      all(a != b for a, b in zip(_serie, _serie[1:])))
+check("výběr přesto sáhne na většinu sady, ne na pár kusů",
+      len(set(_serie)) >= 0.9 * len(telegram.DENNI_OTAZKY),
+      "%d různých z %d" % (len(set(_serie)), len(telegram.DENNI_OTAZKY)))
+telegram._posledni_otazka[0] = None
 
 print("== stopa odpovědi (P4/P7-B/P8: co v textu odpovědi vidět není) ==")
 

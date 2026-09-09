@@ -848,7 +848,7 @@ def capture(text: str, title: str | None = None, kanal: str = "web",
     a ta DO MARKDOWNU PATŘÍ — na rozdíl od kanálu je vlastností právě toho
     jednoho bloku, ne dokumentu. Píše se do TĚLA bloku, ne do nadpisu; proč,
     viz komentář u zápisu níž. Do 2026-09-09 se neukládala
-    nikde: `DENNI_OTAZKY` má šest variant vybíraných `random.choice()`
+    nikde: `DENNI_OTAZKY` má desítky variant vybíraných náhodně
     a do deníku padla jen odpověď, takže „sentiment odpovědí na otázky dne"
     šel zodpovědět jen v souhrnu a odpověď se nedala spárovat s otázkou.
     Zpětně to dohnat nelze, proto to jde do markdownu, který je

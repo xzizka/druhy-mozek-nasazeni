@@ -1723,9 +1723,9 @@ v UI mezi citacemi neobjeví, a s prázdným `ctx` nemá model co číslovat —
 zopakoval by se P7-A, kde si na blok s datem vymyslel `[0]`. Blok proto
 zápisy značí datem (`[2026-09-08]`) a jednou větou říká, ať cituje datem.
 
-**8. Otázka dne se ukládá k odpovědi.** `DENNI_OTAZKY` má 6 variant vybíraných
-`random.choice()` a text otázky se dosud **nikde neukládal** — do deníku padla
-jen odpověď. „Sentiment odpovědí na otázky dne" tak šel zodpovědět jen
+**8. Otázka dne se ukládá k odpovědi.** `DENNI_OTAZKY` má rotující sadu otázek
+(6 při zavedení P15, 31 od téhož dne) a text otázky se dosud **nikde
+neukládal** — do deníku padla jen odpověď. „Sentiment odpovědí na otázky dne" tak šel zodpovědět jen
 v souhrnu; odpověď se nedala spárovat s otázkou, která ji vyvolala.
 
 Řešení **nepotřebuje žádný stav ani migraci**: text otázky nese
