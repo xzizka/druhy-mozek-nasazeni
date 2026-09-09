@@ -514,6 +514,75 @@ Rozbor v `PIPELINE.md`; důsledek pro nastavení je bod 2 níž.
 Práva na `/srv/brain/markdown` a izolace smoke testu, které příprava testu
 odhalila, jsou body 6 a 7 výš.
 
+## Virtual keys: co který klíč smí
+
+**Klíče se nikde v repozitáři nevytvářejí.** Jsou to podman secrets
+s hodnotou vrácenou z `POST /key/generate`, uložené jen v databázi LiteLLM
+a v secretech na brainu. Tahle sekce je proto **jediný zápis o tom, co
+který klíč smí** — a záloha secretů ji nekryje (viz README o nekrytých
+podman secretech).
+
+| klíč | smí volat | rozpočet | rpm |
+|---|---|---|---|
+| `kryton` | `reasoning`, `workhorse`, `cheap`, `cheap-fallback`, **`backstop`** | 20 USD / 30 d | 60 |
+| `retrieval-service` | `cheap`, `cheap-fallback` | 5 USD / 30 d | 60 |
+| `n8n` | `workhorse` | 5 USD / 30 d | — |
+
+**SEZNAM MUSÍ OBSAHOVAT CELÝ FALLBACK ŘETĚZ, NE JEN PRIMÁRNÍ ALIAS.**
+Fallback na `model_group`, který klíč volat nesmí, **se tiše rozbije** —
+LiteLLM ho odmítne s `key_model_access_denied` a řetěz na tom místě končí.
+
+Stalo se to dvakrát:
+
+- `retrieval-service` měl původně jen `["cheap"]`, takže fallback na
+  `cheap-fallback` neexistoval. Zachyceno 2026-08-09, `litellm-config.yaml`
+  na to od té doby na dvou místech varuje.
+- **`kryton` měl jen `reasoning/workhorse/cheap/cheap-fallback`, takže
+  `backstop` vracel HTTP 403.** Zjištěno až 2026-09-09, tedy skoro měsíc
+  po tom, co `backstop` vznikl kvůli incidentu P6. Za normálního provozu to
+  není vidět: `backstop` se nezavolá ani jednou. Projevilo by se to jedině
+  ve scénáři P6 (2026-08-12), kdy spadl `reasoning` i `workhorse` naráz —
+  tedy právě v tom, pro který `backstop` existuje.
+
+**Nejrychlejší kontrola téhle třídy chyb** je porovnat dva výpisy
+`GET /v1/models`. Vrací seznam **filtrovaný podle klíče**, takže pod klíčem
+komponenty chybí to, co volat nesmí:
+
+    MK=$(podman exec litellm printenv LITELLM_MASTER_KEY)
+    KK=$(podman exec kryton printenv LITELLM_API_KEY)
+    for K in "$MK" "$KK"; do
+      curl -s -H "Authorization: Bearer $K" http://127.0.0.1:4000/v1/models \
+        | python3 -c 'import json,sys; print(sorted(m["id"] for m in json.load(sys.stdin)["data"]))'
+    done
+
+Rozdíl těch dvou řádků musí obsahovat jen aliasy, které daná komponenta
+volat NEMÁ — ne aliasy, na které se propadá.
+
+### Oprava seznamu modelů u existujícího klíče
+
+Nezakládej nový klíč; `key/update` zachová rozpočet, spend i rpm:
+
+    MK=$(podman exec litellm printenv LITELLM_MASTER_KEY)
+    TOKEN=$(curl -s -H "Authorization: Bearer $MK" \
+      "http://127.0.0.1:4000/key/list?return_full_object=true&size=20" \
+      | python3 -c "
+    import json,sys
+    d=json.load(sys.stdin)
+    for k in d.get('keys', d if isinstance(d,list) else []):
+        if isinstance(k,dict) and k.get('key_alias')=='kryton':
+            print(k['token']); break
+    ")
+    curl -s -X POST http://127.0.0.1:4000/key/update \
+      -H "Authorization: Bearer $MK" -H "Content-Type: application/json" \
+      -d "{\"key\":\"$TOKEN\",\"models\":[\"reasoning\",\"workhorse\",\"cheap\",\"cheap-fallback\",\"backstop\"]}"
+
+`/key/list` vrací `token`, což je hash klíče — ten stačí jako identifikátor
+pro `key/update` a `key/info`. **Samotný klíč z LiteLLM přečíst nejde**,
+je jen v podman secretu; kdyby se ztratil, musí se vygenerovat nový
+a přepsat secret `litellm_kryton_key`, pak restartovat Krytona.
+
+Ověření, že oprava zabrala, je v `scripts/35-fallback-retez.py`.
+
 ## Doporučené další kroky
 
 1. ~~Napsat Krytona~~ — **běží od 2026-08-09**, port 3001, unit `kryton.service`,
