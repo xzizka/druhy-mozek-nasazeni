@@ -306,8 +306,67 @@ model_list:
       # existuji i u placenych modelu. Proto `num_retries: 3` zustava.
       #
       # Cena ~0,003 $/mesic (backstop se volá jen kdyz `reasoning` selze).
+      #
+      # ===================================================================
+      # POSKYTOVATEL PINNUT 2026-09-09 (`scripts/34-eval-backstop-poskytovatel.py`).
+      #
+      # Do te doby `backstop` pin NEMEL a routoval se mezi trinacti endpointy
+      # od fp4 po bf16. Zjisteno pri oprave toho, ze ho virtual key `kryton`
+      # vubec nesmel volat (HTTP 403), tedy ze posledni clanek retezu byl
+      # tise rozbity.
+      #
+      # ZADANI JE TU JINE NEZ U `reasoning` A NESMI SE TO SPLEST. U nej se
+      # vybiralo podle LATENCE a `allow_fallbacks: false` je spravne, protoze
+      # za nim v retezu jeste stoji `workhorse` — tvrde selhani je tam lepsi
+      # nez pomaly poskytovatel. `backstop` je POSLEDNI clanek: za nim uz
+      # nestoji nic, takze tvrde selhani znamena, ze uzivatel nedostane nic.
+      # Proto tady `allow_fallbacks: true`, tedy OBRACENE nez u `reasoning`.
+      #
+      # Zmereno 2 opakovani x 2 ulohy na 6 poskytovatelu + vychozi routing,
+      # prompt tyz jako v `25-eval-or-routing.py`. Poradi kriterii bylo:
+      # prizna neznalost > odpovi vubec > presnost > latence.
+      #
+      #   poskytovatel  kvant  429   uloha 2/2   median s (odpov./past)
+      #   Groq          ?      ne    ano/ano     0,84 / 0,67   <- VOLBA
+      #   Novita        fp4    ne    ano/ano     3,69 / 2,35
+      #   CoreWeave     fp4    ne    ano/ano     7,06 / 2,86
+      #   Darkbloom     fp8    ne    ano/ano    13,30 / 9,41
+      #   SiliconFlow   fp8    ne    ano/ano    14,33 / 17,76
+      #   DeepInfra     bf16   ANO   —           nedostupny
+      #   Together      ?      ANO   —           nedostupny
+      #
+      # NEJPODSTATNEJSI NALEZ: **DeepInfra, jedina bf16 (plna presnost)
+      # varianta, vraci 429 ve 4 ze 4** i po tech pokusech s prodlevou
+      # ("gpt-oss-20b is temporarily rate-limited upstream"). Totez Together.
+      # Kdyby se pin vybral UVAHOU "na posledni zachranu patri plna presnost",
+      # byl by `backstop` rozbity NATRVALO — a projevilo by se to jedine
+      # v okamziku, kdy uz spadly `reasoning` i `workhorse`. Presne proto se
+      # to merilo, misto aby se to odvodilo.
+      #
+      # Groq je nejdrazsi z pouzitelnych (0,075/0,300 proti 0,030/0,130
+      # u CoreWeave), ale pri ~0,003 $/mesic je to rozdil na urovni setin
+      # centu. A rychlost tu znamena vic, nez rikala puvodni poznamka
+      # "jde o to, aby vubec odpovedela": nez se na `backstop` vubec dojde,
+      # spotrebuji `reasoning` (timeout 120, num_retries 2) a `workhorse`
+      # (timeout 90, num_retries 3) uz hodne wall-clocku, takze uzivatel ceka
+      # dlouho pred prvnim tokenem z backstopu.
+      #
+      # Kvalita se merila PRIMO, ne odhadovala z kvantizace: vsech pet
+      # dostupnych poskytovatelu 2/2 na odpoveditelne uloze i 2/2 na pasti,
+      # kde odpoved v uryvcich NENI a model to ma priznat. Groq: "Kontext,
+      # ktery jste poskytl, neobsahuje zadnou informaci o hodnote
+      # wal_keep_size." U aliasu, jehoz znamou vadou je verohodny nesmysl
+      # (viz `router_settings` nize), je tohle merena vlastnost, ne domnenka.
+      # ===================================================================
       model: openrouter/openai/gpt-oss-20b
       api_key: os.environ/OPENROUTER_API_KEY
+      extra_body:
+        provider:
+          order: ["Groq", "Novita", "CoreWeave"]
+          # ZAMERNE true, na rozdil od `reasoning`. Viz uvaha vyse: za
+          # backstopem uz nestoji nic, takze radeji pomaly poskytovatel
+          # nez zadna odpoved.
+          allow_fallbacks: true
       timeout: 150
       max_tokens: 2500
       # Pridano 2026-08-12 (P6): drive zadny num_retries, jelo se na
