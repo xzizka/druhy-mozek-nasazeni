@@ -1193,13 +1193,15 @@ check("verify_token odmítne cokoliv, když secret chybí",
       _over(TOKEN) is None and _over("") is None)
 main.config.MCP_BEARER_TOKEN = TOKEN
 
-res = mcp_server.hledat.fn("kde je HNSW?")
+# FastMCP 3.x: @mcp.tool() vraci PUVODNI funkci, ne komponentu
+# (v 2.x se k ni chodilo pres .fn). Volame tedy primo.
+res = mcp_server.hledat("kde je HNSW?")
 check("nástroj hledat() zavolá core.search+core.answer",
       res["odpoved"] == "Odpověď s citací [1]."
       and res["citace"][0]["source_path"] == "poznamky/test.md",
       res)
 
-res = mcp_server.zachytit.fn("Poznámka z MCP nástroje.", "Zkouška MCP")
+res = mcp_server.zachytit("Poznámka z MCP nástroje.", "Zkouška MCP")
 cesta_mcp = Path(MD, res["ulozeno_do"])
 check("nástroj zachytit() opravdu zapsal soubor",
       cesta_mcp.exists() and "Poznámka z MCP nástroje." in cesta_mcp.read_text(encoding="utf-8"),

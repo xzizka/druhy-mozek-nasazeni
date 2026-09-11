@@ -265,8 +265,11 @@ IP=10.89.7.12
 # zalohy by skocila na jinou verzi BEZ zmeny v repozitari — tichy posun
 # stejne kategorie jako nesynchronizovany symlink z 2026-08-13.
 #
-# Digest, ne verzovany tag, protoze verzovane stable tagy (v1.97.0-stable
-# apod.) v registru NEEXISTUJI — overeno vylistovanim tagu z ghcr.io.
+# Digest, ne verzovany tag. Puvodni duvod znel "verzovane stable tagy
+# (v1.97.0-stable apod.) v registru NEEXISTUJI" — to plati pro tvar
+# s prponou -stable, ale ne obecne: ciste verzovane tagy jako v1.100.1
+# v registru JSOU (overeno 2026-09-11). Digest se drzi presto, protoze
+# je to jediny zapis, ktery je imunni i vuci prepsani existujiciho tagu.
 #
 # POZOR, KTERY DIGEST: pinuje se INDEX (multi-arch), ne jeho dite.
 # "podman image inspect --format {{.Digest}}" vraci PLATFORM manifest te
@@ -278,7 +281,15 @@ IP=10.89.7.12
 # mediaType application/vnd.oci.image.index.v1+json a seznam deti.
 #
 # UPGRADE se ted dela vedome: zmen digest tady, zaloz databazi litellm
-# (Prisma migrace) a nasad. Aktualni upstream k 2026-08-18 je 1.97.0.
+# (Prisma migrace) a nasad.
+#
+# UPGRADE 2026-09-11: 1.95.0 (af806882) -> 1.100.1 (a3715fa7).
+# a3715fa7 je INDEX tagu v1.100.1 a zaroven to, na co ten den ukazovaly
+# pohyblive tagy :main-stable i :latest. Mezi 1.95.0 a 1.100.1 je pet
+# vydani; zadne nema znamou zranitelnost, duvodem je zaostavani, ne CVE.
+# Prisma migrace v tomhle okne jsou: opt-in REPLICA IDENTITY FULL (1.96.0),
+# odolnejsi entrypoint migraci (1.97.0, 1.99.0) a volitelny
+# USE_V2_MIGRATION_RESOLVER (1.99.0, ponechano vypnute).
 #
 # POZOR PRI EDITACI TOHOHLE BLOKU: heredoc nize je NEUVOZENY, takze shell
 # v nem interpretuje $ i zpetne apostrofy. Pri prvnim zapisu tohohle
@@ -286,7 +297,7 @@ IP=10.89.7.12
 # do logu spadlo sest "command not found" a jeden "podman pull" se skutecne
 # spustil (nastesti bez argumentu, takze jen zahlasil chybu). V komentarich
 # uvnitr heredocu proto NEPOUZIVEJ zpetne apostrofy ani $.
-Image=ghcr.io/berriai/litellm@sha256:af806882b7a6ced41658db5b6a7e98ed7b9b51d03b935e0417bf1c8552d688af
+Image=ghcr.io/berriai/litellm@sha256:a3715fa7ad8387941ab697259bd2881d68931657247a41984f90fae6d11c62bf
 Network=brain.network
 # ZMENA proti navrhu: publikovano na homelab LAN i Tailscale (bind 0.0.0.0).
 # Chraneno master key / virtual keys.
