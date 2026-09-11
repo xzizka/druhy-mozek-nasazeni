@@ -11,7 +11,7 @@ provozu nemá zavolat ani jednou, s průměrnou latencí 56 sekund. Nechybělo
 úložiště ani nástroj — chyběl pohled na to, co už bylo zapsané.
 
 Tenhle skript je ten pohled. Nesbírá nová data; čte, co Kryton a LiteLLM
-ukládají tak jako tak, a hlásí pět věcí, o kterých z incidentů víme, že
+ukládají tak jako tak, a hlásí šest věcí, o kterých z incidentů víme, že
 znamenají potíž.
 
 CO SE HLÍDÁ A PROČ PRÁVĚ TOHLE
@@ -46,6 +46,13 @@ A5 KLÍČE      Virtual key bez `max_budget` nebo bez `rpm_limit`, nebo klíč
               komponentě nevyčerpala kredit celé platformy" — klíč bez
               stropu tuhle ochranu nemá. (Nález z 2026-08-24: `n8n` je
               přesně takový.)
+
+A6 ODSEKNUTÍ  Odpověď narazila na strop tokenů (`finish_reason=length`),
+              seskupeno podle deníkového období. Jedno odseknutí uživatel
+              vidí sám — je označené v odpovědi. Opakované znamená špatně
+              nastavený strop nebo nefunkční pokyn k formátu v deníkovém
+              bloku, a to se pozná jedině souhrnem. Doplněno s P15
+              (2026-09-09), tedy později než A1-A5.
 
 SPOUŠTĚNÍ
 =========
