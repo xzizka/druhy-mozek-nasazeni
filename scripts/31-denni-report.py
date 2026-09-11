@@ -10,9 +10,13 @@ je, že **data k odhalení byla celou dobu v databázi.** Jeden `GROUP BY` nad
 provozu nemá zavolat ani jednou, s průměrnou latencí 56 sekund. Nechybělo
 úložiště ani nástroj — chyběl pohled na to, co už bylo zapsané.
 
-Tenhle skript je ten pohled. Nesbírá nová data; čte, co Kryton a LiteLLM
-ukládají tak jako tak, a hlásí šest věcí, o kterých z incidentů víme, že
-znamenají potíž.
+Tenhle skript je ten pohled. Hlásí osm věcí, o kterých z incidentů víme,
+že znamenají potíž.
+
+A1-A6 nesbírají nová data; čtou, co Kryton a LiteLLM ukládají tak jako tak.
+A7 a A8 jsou výjimka: čtou `journalctl` a `systemctl show`, protože restart
+kontejneru ani špička paměti v žádné databázi nejsou. Bez nich měl report
+slepé místo přesně tam, kde 2026-09-11 vznikl další tichý incident.
 
 CO SE HLÍDÁ A PROČ PRÁVĚ TOHLE
 ==============================
@@ -54,6 +58,25 @@ A6 ODSEKNUTÍ  Odpověď narazila na strop tokenů (`finish_reason=length`),
               bloku, a to se pozná jedině souhrnem. Doplněno s P15
               (2026-09-09), tedy později než A1-A5.
 
+A7 RESTARTY   Počet startů služby v okně, a zvlášť OOM killy (`status=137`).
+              2026-09-11 dostalo `litellm` OOM kill po 45 hodinách běhu,
+              `Restart=always` ho hned zvedl a navenek to nebylo poznat —
+              našlo se to náhodou při předletové kontrole před upgradem,
+              čtyři a půl hodiny po tom, co se to stalo. OOM se proto hlásí
+              VŽDY; prostý restart až nad prahem, aby jedno plánované
+              nasazení nepípalo.
+
+A8 PAMĚŤ      MemoryPeak blízko MemoryMax. Předstih před A7: u litellm se
+              ten den `MemoryPeak` rovnal `MemoryMax` na bajt.
+              POZOR NA VÝKLAD: špička u stropu SAMA O SOBĚ OOM neznamená.
+              Cgroup napřed recykluje page cache a teprve když není co
+              uvolnit, zabíjí. `infinity` má dlouhodobě špičku 4 kB NAD
+              stropem a poslední OOM má z 2026-08-06. Rozhodující je
+              sloupec OOM v tabulce Služby, ne tenhle alert.
+              Proto má A8 seznam výjimek (`PAMET_VYJIMKY`) — `infinity` by
+              jinak pípal každý den. V tabulce zůstává vidět, potlačuje se
+              alert, ne údaj. OOM kill na něm ohlásí A7, ten výjimku nemá.
+
 SPOUŠTĚNÍ
 =========
 Na brainu, jako root (potřebuje `podman exec` na kontejner postgresu):
@@ -64,6 +87,10 @@ Na brainu, jako root (potřebuje `podman exec` na kontejner postgresu):
 Návratový kód 0 = žádný alert, 1 = aspoň jeden. Díky tomu se to dá pověsit
 na systemd timer s `OnFailure=`, nebo pustit ručně po nasazení.
 
+VĚDOMÉ OMEZENÍ: A7 a A8 fungují jen NA BRAINU, protože čtou systemd toho
+stroje. Jinde se tabulka Služby vypíše jako nedostupná a alerty se přeskočí;
+zbytek reportu běží dál, protože ten jde přes `podman exec` do postgresu.
+
 VĚDOMÉ OMEZENÍ: report NEVIDÍ obsah promptů ani odpovědí od LiteLLM —
 `turn_off_message_logging: true` je zapnuté schválně a tenhle skript ho
 nemá důvod obcházet. Obsah odpovědí Krytona v `message` ale k dispozici je,
@@ -72,6 +99,7 @@ protože to je vlastní databáze na témž stroji, ne telemetrie ven.
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 
@@ -92,6 +120,63 @@ def dotaz(db: str, sql: str) -> list[list[str]]:
     if r.returncode != 0:
         sys.exit("SQL selhalo (%s): %s" % (db, r.stderr.strip()[:300]))
     return [radek.split(SEP) for radek in r.stdout.strip().splitlines() if radek]
+
+
+SLUZBY = ["postgres", "infinity", "litellm", "retrieval", "kryton"]
+
+# Služby, u kterých se A8 (paměť u stropu) NEHLÁSÍ, protože plný cgroup je
+# u nich ustálený stav, ne předzvěst potíže. V tabulce Služby jsou pořád
+# vidět — potlačuje se alert, ne údaj.
+#
+# Bez téhle výjimky by A8 pípalo na `infinity` KAŽDÝ DEN: drží dva modely
+# a jeho MemoryPeak sedí trvale na MemoryMax (2026-09-11 dokonce 4 kB nad),
+# přitom posledních 19 OOM killů má z 2026-08-06. Je to tatáž past, před
+# kterou varuje poznámka u A1: alert, co pípá pořád, se za týden přestane
+# číst. OOM kill na `infinity` se ohlásí přes A7, ten výjimku nemá.
+PAMET_VYJIMKY = {
+    "infinity": "drží modely v page cache, plný cgroup je u něj normál",
+}
+
+
+def systemd_pamet(unit: str) -> tuple[int, int | None, int | None]:
+    """Vrátí (current, peak, max) v bajtech; max je None, když limit není.
+
+    POZOR: `systemctl show --value` vrací hodnoty v JINÉM pořadí, než v jakém
+    se vlastnosti zadaly (ověřeno 2026-09-11: `-p MemoryCurrent -p MemoryMax
+    -p MemoryPeak` vrátilo Current, Peak, Max). Proto se čte tvar `Klíč=Hodnota`
+    a páruje se podle jména, ne podle pořadí.
+    """
+    try:
+        r = subprocess.run(
+            ["systemctl", "show", unit, "-p", "MemoryCurrent", "-p", "MemoryMax",
+             "-p", "MemoryPeak"], capture_output=True, text=True)
+    except OSError:
+        # systemctl na stroji vůbec není (stanice, kontejner). Docstring
+        # slibuje, že se v takovém případě přeskočí A7/A8 a zbytek poběží —
+        # nenulový návratový kód to nepokryje, binárka chybí úplně.
+        return (0, None, None)
+    if r.returncode != 0:
+        return (0, None, None)
+    d = dict(x.split("=", 1) for x in r.stdout.strip().splitlines() if "=" in x)
+    def b(k):
+        v = d.get(k, "")
+        # "infinity" = bez limitu, "[not set]" = starší systemd bez MemoryPeak
+        return int(v) if v.isdigit() else None
+    return (b("MemoryCurrent") or 0, b("MemoryPeak"), b("MemoryMax"))
+
+
+def journal(unit: str, hodin: int) -> str:
+    try:
+        r = subprocess.run(
+            ["journalctl", "-u", unit, "--since", "%d hours ago" % hodin,
+             "--no-pager"], capture_output=True, text=True)
+    except OSError:
+        return ""
+    return r.stdout if r.returncode == 0 else ""
+
+
+def mib(n) -> str:
+    return "-" if n is None else "%d" % (n / 1048576)
 
 
 def cislo(s: str, jinak=0):
@@ -125,6 +210,11 @@ def main() -> None:
                     help="pod tímhle počtem se podíl nehlásí, je to šum (3)")
     ap.add_argument("--prah-latence", type=int, default=30000,
                     help="ms, nad kterými se volání hlásí (30000)")
+    ap.add_argument("--prah-restartu", type=int, default=1,
+                    help="počet startů služby v okně, nad kterým se hlásí (1) — "
+                         "jedno plánované nasazení je normální, dvě už ne")
+    ap.add_argument("--prah-pameti", type=float, default=0.90,
+                    help="podíl MemoryPeak/MemoryMax, nad kterým se hlásí (0.90)")
     a = ap.parse_args()
     okno = "%d hours" % a.hodin
 
@@ -310,6 +400,74 @@ def main() -> None:
                       "období, nebo zvyšte DENIK_ANSWER_MAX_TOKENS — ale "
                       "POZOR, strop platí i pro gemmu ve fallbacku (P8)."
                       % (n, dni, znaku))
+
+    # -----------------------------------------------------------------
+    # Služby: restarty a paměť
+    #
+    # JEDINÉ MÍSTO, KDE REPORT NEČTE Z DATABÁZE. Přidáno 2026-09-11 poté,
+    # co litellm dostalo OOM kill (status=137) po 45 hodinách běhu a nikdo
+    # si toho čtyři a půl hodiny nevšiml — report ho neviděl, protože
+    # v žádné databázi taková událost není.
+    # -----------------------------------------------------------------
+    radky_sluzeb = []
+    restarty = {}
+    pamet = {}
+    systemd_dostupny = False
+    for u in SLUZBY:
+        log = journal(u, a.hodin)
+        if log:
+            systemd_dostupny = True
+        startu = len(re.findall(r"systemd\[\d+\]: Started %s\.service" % re.escape(u), log))
+        oomu = len(re.findall(r"%s\.service: Main process exited.*status=137" % re.escape(u), log))
+        cur, peak, mx = systemd_pamet(u)
+        restarty[u] = (startu, oomu)
+        pamet[u] = (cur, peak, mx)
+        podil = "-" if not (peak and mx) else "%.0f %%" % (100.0 * peak / mx)
+        radky_sluzeb.append([u, startu, oomu, mib(cur), mib(peak),
+                             mib(mx) if mx else "bez limitu", podil])
+
+    if systemd_dostupny:
+        tabulka("Služby — restarty a paměť (MiB)",
+                ["služba", "startů", "OOM", "teď", "špička", "strop", "špička/strop"],
+                radky_sluzeb)
+    else:
+        print("\nSlužby — restarty a paměť")
+        print("  (nedostupné: journalctl nic nevrátil — běží tohle na brainu jako root?)")
+
+    # A7 — restarty. OOM kill se hlásí VŽDY, protože nikdy není v pořádku;
+    # prostý restart až nad prahem, aby jedno plánované nasazení nepípalo.
+    for u in SLUZBY:
+        startu, oomu = restarty[u]
+        if oomu:
+            alerty.append("A7 RESTARTY: `%s` dostal %sx OOM kill (status=137) "
+                          "a Restart=always ho zvedl, takže navenek běží dál. "
+                          "Zvedni MemoryMax, nebo najdi, co paměť žere."
+                          % (u, oomu))
+        elif startu > a.prah_restartu:
+            alerty.append("A7 RESTARTY: `%s` startoval %sx za %d h, práh je %d. "
+                          "Pokud jsi nenasazoval, je to restart loop."
+                          % (u, startu, a.hodin, a.prah_restartu))
+
+    # A8 — paměť u stropu.
+    #
+    # POZOR NA VÝKLAD: „špička = strop" SAMO O SOBĚ OOM NEZNAMENÁ. Cgroup
+    # nejdřív recykluje page cache a teprve když není co uvolnit, zabíjí.
+    # Ověřeno 2026-09-11: infinity má MemoryPeak o 4 kB NAD MemoryMax
+    # a přitom posledních 19 OOM killů je z 2026-08-06. Rozhodující je
+    # sloupec OOM v tabulce výš (alert A7), tenhle alert je předstih.
+    for u in SLUZBY:
+        cur, peak, mx = pamet[u]
+        if not (peak and mx):
+            continue
+        if u in PAMET_VYJIMKY:
+            continue
+        if peak / mx >= a.prah_pameti:
+            alerty.append("A8 PAMĚŤ: `%s` měl špičku %s MiB proti stropu %s MiB "
+                          "(%.0f %%, práh %.0f %%). Zatím to OOM neznamená — "
+                          "cgroup napřed recykluje page cache. Jestli je "
+                          "ve sloupci OOM nula, je tohle jen předstih."
+                          % (u, mib(peak), mib(mx), 100.0 * peak / mx,
+                             100.0 * a.prah_pameti))
 
     print("\n" + "=" * 70)
     if not alerty:

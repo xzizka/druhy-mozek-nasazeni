@@ -244,10 +244,26 @@ neudělal z bota mlčícího bota.
     /root/deploy/scripts/31-denni-report.py            # posledních 24 h
     /root/deploy/scripts/31-denni-report.py --hodin 96 # zpětně
 
-Pět alertů (fallback, podíl odmítnutí, návrat `:free` tarifu, latence,
-klíče bez rozpočtu), návratový kód 1 když něco pípne. Ověřeno proti
-historickým datům: na okně od 2026-08-06 vypíše celou P8 i P6 včetně
-`workhorse` s maximem 742 822 ms.
+Osm alertů, návratový kód 1 když něco pípne:
+
+| | co hlídá |
+|---|---|
+| A1 | propad na jiný model, než se chtěl (per klíč, ne per alias) |
+| A2 | podíl odpovědí „v poznámkách jsem nic nenašel" |
+| A3 | návrat `:free` tarifu |
+| A4 | latence volání |
+| A5 | virtual key bez rozpočtu nebo nad 80 % |
+| A6 | odpověď odseknutá na stropu tokenů |
+| A7 | restarty služeb a OOM killy |
+| A8 | paměť u stropu |
+
+Ověřeno proti historickým datům: na okně od 2026-08-06 vypíše celou P8
+i P6 včetně `workhorse` s maximem 742 822 ms.
+
+**A1-A6 čtou jen databáze; A7 a A8 čtou `journalctl` a `systemctl show`**,
+takže fungují jen na brainu. Jinde se ta část přeskočí a zbytek běží dál.
+Přibyly 2026-09-11 poté, co `litellm` dostalo OOM kill, `Restart=always`
+ho zvedlo a report to neviděl — taková událost v žádné databázi není.
 
 **Zlatá sada.**
 
