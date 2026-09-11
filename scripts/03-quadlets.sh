@@ -341,10 +341,21 @@ Restart=always
 # OPRAVA: puvodne MemoryMax=800M podle rozpoctu v README (RSS 0,5 GB).
 # Merenim zjisteno, ze tato verze LiteLLM ma po startu 1,13 GB - cgroup
 # limit 800M ji zabijel jeste behem startu ("conmon exited prematurely",
-# zadny zapis do journalu, jen restart loop). 1600M je merena hodnota
-# plus rezerva. DUSLEDEK: rozpocet pameti se posouva o ~1,1 GB na ukor
-# page cache, kterou README povazuje za zdroj vykonu HNSW scanu.
-MemoryMax=1600M
+# zadny zapis do journalu, jen restart loop). DUSLEDEK: rozpocet pameti
+# se posouva na ukor page cache, kterou README povazuje za zdroj vykonu
+# HNSW scanu.
+#
+# 1600M -> 1800M, 2026-09-11. Duvod: 1600M NESTACILO. Toho dne v 09:37
+# dostalo litellm OOM kill (status=137) po 45 hodinach behu a nikdo si
+# toho nevsiml - naslo se to az pri predletove kontrole pred upgradem.
+# Dukaz, ze slo o strop a ne o pad: MemoryPeak se rovnal MemoryMax na
+# bajt (1677721600).
+#
+# Po upgradu na 1.100.1 je merena spicka 1,32 GiB a dela ji START
+# s Prisma migracemi, ne ustaleny provoz. Pri 1600M z toho zbyvala
+# rezerva ~255 MB, pri 1800M je ~443 MB. Hostitel ma ~14,9 GB volnych,
+# takze tech 200 MB navic je proti riziku dalsiho OOM levne.
+MemoryMax=1800M
 
 [Install]
 WantedBy=default.target
