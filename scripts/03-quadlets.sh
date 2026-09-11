@@ -486,20 +486,20 @@ Environment=MARKDOWN_ROOT=/data/markdown
 #
 # POZOR, TENHLE SEZNAM MUSI OBSAHOVAT CELY FALLBACK RETEZ. Zjisteno
 # 2026-09-09: klic mel jen reasoning/workhorse/cheap/cheap-fallback, takze
-# `backstop` — POSLEDNI clanek retezu `reasoning -> [workhorse, backstop]`
-# z litellm-config.yaml — vracel HTTP 403 `key_model_access_denied`.
-# Za normalniho provozu to nebylo videt: `backstop` se nezavola ani jednou.
+# "backstop" — POSLEDNI clanek retezu "reasoning -> [workhorse, backstop]"
+# z litellm-config.yaml — vracel HTTP 403 "key_model_access_denied".
+# Za normalniho provozu to nebylo videt: "backstop" se nezavola ani jednou.
 # Projevilo by se to jedine ve scenari P6 (2026-08-12), kdy spadl
-# `reasoning` i `workhorse` naraz, tedy presne v tom, pro ktery `backstop`
+# "reasoning" i "workhorse" naraz, tedy presne v tom, pro ktery "backstop"
 # vznikl. Je to tataz past, na kterou litellm-config.yaml na dvou mistech
-# sam varuje u klice `retrieval-service`.
+# sam varuje u klice "retrieval-service".
 #
 # Klice se v tomhle skriptu NEVYTVARI (jsou to podman secrets s hodnotou
 # z /key/generate), takze tenhle komentar je jediny zapis o tom, co klic
 # smi. Oprava a postup pri obnove jsou v NASAZENI.md, sekce
 # "Virtual keys: co ktery klic smi".
 #
-# Nejrychlejsi kontrola teto tridy chyb: `GET /v1/models` vraci seznam
+# Nejrychlejsi kontrola teto tridy chyb: "GET /v1/models" vraci seznam
 # FILTROVANY podle klice, takze staci porovnat vypis pod klicem komponenty
 # proti vypisu pod master key.
 Secret=litellm_kryton_key,type=env,target=LITELLM_API_KEY
