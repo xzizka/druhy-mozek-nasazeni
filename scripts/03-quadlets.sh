@@ -12,7 +12,14 @@
 # =====================================================================
 set -euo pipefail
 
-APP_ROOT=/srv/brain
+# Instancni promenna: osobni brain /srv/brain, komercni instance jinam.
+# Komerce je konfigurace, ne fork - stejne quadlety, jen jiny APP_ROOT a
+# hodnoty nize.
+APP_ROOT="${APP_ROOT:-/srv/brain}"
+# S3 bucket a prefix pro uloziste originalu a zalohy. Komerce ma vlastni
+# bucket od pocatku (D3).
+S3_BUCKET="${S3_BUCKET:-second-brain-kryton}"
+BACKUP_S3_PREFIX="${BACKUP_S3_PREFIX:-db-backups/}"
 QD=/etc/containers/systemd
 install -d -m 0755 "$QD"
 
@@ -32,6 +39,22 @@ if podman secret inspect keep_master_token >/dev/null 2>&1; then
     KEEP_SECRET_LINE="Secret=keep_master_token,type=env,target=KEEP_MASTER_TOKEN"
 else
     echo "POZNAMKA: podman secret keep_master_token neexistuje, Keep sync zustane vypnuty."
+fi
+
+# ---------------------------------------------------------------------
+# Telegram je OSOBNI kanal (denni otazka, prepis hlasovek). Kdyz secret
+# telegram_bot_token neexistuje, quadlet cely blok vynecha - Kryton se
+# bez Telegramu normalne spusti. Komerci instance (ucetni) zadny osobni
+# bot nema.
+# ---------------------------------------------------------------------
+TELEGRAM_ALLOWED_USER_ID="${TELEGRAM_ALLOWED_USER_ID:-819345451}"
+TELEGRAM_LINES=""
+if podman secret inspect telegram_bot_token >/dev/null 2>&1; then
+    TELEGRAM_LINES="Environment=TELEGRAM_ALLOWED_USER_ID=${TELEGRAM_ALLOWED_USER_ID}
+Secret=telegram_bot_token,type=env,target=TELEGRAM_BOT_TOKEN
+Environment=TELEGRAM_DAILY_QUESTION_HOUR_UTC=18"
+else
+    echo "POZNAMKA: podman secret telegram_bot_token neexistuje, Telegram zustane vypnuty."
 fi
 
 # ---------------------------------------------------------------------
@@ -528,26 +551,22 @@ Secret=platform_ro_url,type=env,target=ANALYTICS_DATABASE_URL
 # profilu se uklada ke kazdemu souboru kvuli budouci migraci.
 Environment=S3_PROFILE=backblaze
 Environment=S3_ENDPOINT=https://s3.eu-central-003.backblazeb2.com
-Environment=S3_BUCKET=second-brain-kryton
+Environment=S3_BUCKET=${S3_BUCKET}
 Secret=s3_access_key_id,type=env,target=S3_ACCESS_KEY_ID
 Secret=s3_secret_access_key,type=env,target=S3_SECRET_ACCESS_KEY
 # Zaloha DB (kryton, litellm) a sifrovaneho balicku secrets, viz
 # scripts/19-kryton-backup.sh a scripts/20-kryton-backup-setup.sh.
 # BACKUP_S3_BUCKET prazdny = stejny jako S3_BUCKET (viz config.py).
-Environment=BACKUP_S3_PREFIX=db-backups/
+Environment=BACKUP_S3_PREFIX=${BACKUP_S3_PREFIX}
 Environment=BACKUP_RETENTION_DAYS=30
 # type=mount, ne env: openssl cte klic jako soubor (-pass file:...), ne
 # jako promennou prostredi - zabranuje se tim naslednemu logovani hodnoty
 # pri pripadnem \`env\` vypisu procesu.
 Secret=backup_encryption_key,type=mount,target=backup_encryption_key
-# Telegram mustek (krok 1: jen text), viz app/telegram.py.
-# TELEGRAM_ALLOWED_USER_ID je JEDINA autentizace kanalu - overuje se na
-# KAZDE prichozi zprave. Bez ni by bot odpovidal komukoliv, kdo ho najde.
-Environment=TELEGRAM_ALLOWED_USER_ID=819345451
-Secret=telegram_bot_token,type=env,target=TELEGRAM_BOT_TOKEN
-# Krok 2: denni otazka, UTC (18 = 20:00 CEST). POZOR: hodina neni DST-aware,
-# az se v rijnu vrati CET (UTC+1), posune se fakticky na 19:00 mistniho.
-Environment=TELEGRAM_DAILY_QUESTION_HOUR_UTC=18
+# Telegram mustek (krok 1: jen text), viz app/telegram.py. TELEGRAM_LINES
+# je prazdny, kdyz telegram_bot_token secret neexistuje (komerce) - tim
+# cely kanal zmizi a Kryton se bez nej spusti.
+${TELEGRAM_LINES}
 # Krok 3: prepis hlasovek pres OpenRouter (app/stt.py), stejny endpoint jako
 # chat (viz litellm-config.yaml). ZAMERNE stejny secret jako openrouter_api_key
 # nize u litellm - zadny novy ucet ani secret, jen dalsi cil pro uz existujici

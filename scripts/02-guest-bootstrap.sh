@@ -12,7 +12,9 @@
 # =====================================================================
 set -euo pipefail
 
-APP_ROOT=/srv/brain
+# Instancni promenna: osobni brain /srv/brain, komercni instance jinam.
+# Komerce BEZE ZMENY KODU - jedna repo, druha konfigurace.
+APP_ROOT="${APP_ROOT:-/srv/brain}"
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update -qq
