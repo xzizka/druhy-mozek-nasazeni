@@ -88,6 +88,20 @@ PER KLÍČ (vzorec NASAZENI). První běh na komerci hned odhalil A7
 Volání modelu mimo virtual keys (probe testy) jde do spend logu jako
 `(bez aliasu)` — stejně jako na brainu; report to nerozlišuje jako alert.
 
+## DB migrace retrieval (dluh nalezený v D6 — 2026-09-17)
+
+Komerční DB `retrieval` měla po nasazení schéma jen z `02-retrieval.sql`.
+Migrace `sql/03-multilang.sql` (sloupec `document.lang`, `ts_config`,
+hybrid_search s `p_ts_config`) a `sql/04-context-expand.sql` (`ordinal`)
+**nebyly aplikované** — nebylo to poznat, protože korpus byl prázdný;
+první reindex spadl na `column "lang" does not exist`. Doaplikováno ručně
+(03 vyžadovalo DROP staré varianty `hybrid_search` kvůli rozlišení podpisu),
+poté reindex OK: 6 dokumentů / 27 chunků / 11,3 s.
+
+**Poučení pro D7 (tenancy):** založit migrační krokovatelný mechanismus
+(zde se migrace prováděly ručně od 03 výš — `04-init-db.sh` končí u 02).
+Reprodukovatelnost nové instance teď stojí na ručním kroku.
+
 ## Tajnosti (jen SEZNAM, hodnoty jinde)
 
 `litellm_master_key`, `litellm_salt_key`, `litellm_database_url`,
