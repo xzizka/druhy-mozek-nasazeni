@@ -20,6 +20,10 @@ APP_ROOT="${APP_ROOT:-/srv/brain}"
 # bucket od pocatku (D3).
 S3_BUCKET="${S3_BUCKET:-second-brain-kryton}"
 BACKUP_S3_PREFIX="${BACKUP_S3_PREFIX:-db-backups/}"
+# Infinity image: vychozi vseobecny (s CUDA libs, ~4,8 GB komprimovany), ale
+# komerci staci CPU-only varianta (~0,75 GB), ktera se navic stahne z
+# Docker Hubu spolehliveji. Obe bezi s `--engine torch --device cpu`.
+INFINITY_IMAGE="${INFINITY_IMAGE:-docker.io/michaelf34/infinity:0.0.77}"
 QD=/etc/containers/systemd
 install -d -m 0755 "$QD"
 
@@ -188,7 +192,7 @@ ContainerName=infinity
 # to spravne a port zacne odmitat spojeni, i kdyz sluzba bezi. Pevna IP
 # tenhle rezim odstrani: duplicitni pravidlo miri na stejnou adresu.
 IP=10.89.7.11
-Image=docker.io/michaelf34/infinity:0.0.77
+Image=__INFINITY_IMAGE__
 Network=brain.network
 # ZMENA proti navrhu: publikovano na homelab LAN i Tailscale (bind 0.0.0.0).
 # Infinity nema autentizaci - omezeni resi firewall.
@@ -255,6 +259,10 @@ MemoryMax=5120M
 [Install]
 WantedBy=default.target
 EOF
+
+# Image je v heredocu vymenen pres placeholder (heredoc je citovany kvuli
+# backtickum v komentari). Komerce: INFINITY_IMAGE=...:0.0.77-cpu.
+sed -i "s|__INFINITY_IMAGE__|${INFINITY_IMAGE}|" "$QD/infinity.container"
 
 # =====================================================================
 # LiteLLM

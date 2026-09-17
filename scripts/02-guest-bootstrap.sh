@@ -19,7 +19,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 apt-get update -qq
 apt-get install -y --no-install-recommends \
-    podman podman-compose containers-storage uidmap slirp4netns \
+    podman podman-compose containers-storage uidmap slirp4netns passt aardvark-dns \
     curl ca-certificates jq gnupg openssl \
     postgresql-client-17 || \
 apt-get install -y --no-install-recommends postgresql-client
