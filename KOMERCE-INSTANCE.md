@@ -64,6 +64,30 @@ přečíst nedají.
 (podmínka funkční DNS v podman síti; bez nich litellm padal v Prisma engine
 na `gaierror` pro `postgres`).
 
+## Sledovatelnost (D3 — nainstalováno 2026-09-17)
+
+Oproti osobnímu brainu (kde se `31-denni-report.py` pouští ručně) má
+komerce **denní timery**, aby tichá degradace neprošla nepozorovaně:
+
+- `denni-report.timer` — denně **03:10 UTC**, spouští
+  `/root/deploy/scripts/31-denni-report.py`. Výstup i alerty jdou do
+  journalu (`journalctl -u denni-report.service`). **Návratový kód 1 =
+  aspoň jeden alert** → cenová jednotka skončí ve stavu `failed`, což je
+  záměrný signál (OnFailure-hook příště). A7/A8 fungují, protože uvnitř
+  LXC je systemd.
+- `kryton-backup.timer` — denně **03:15 UTC**, `/root/deploy/scripts/
+  19-kryton-backup.sh` (záloha + OVĚŘENÍ OBNOVY obou databází a secrets,
+  viz D2). Nastaven přes `20-kryton-backup-setup.sh`; šifrovací klíč
+  `backup_encryption_key` už existoval.
+
+P8f („fallback nesmí být tichý") je aktivní: LiteLLM loguje každý propad
+do journalu a A1 reportu hlídá `workhorse`/`backstop` pod klíčem `kryton`
+PER KLÍČ (vzorec NASAZENI). První běh na komerci hned odhalil A7
+(přebytek startů + OOM z nasazování) — alerty tedy reálně fungují.
+
+Volání modelu mimo virtual keys (probe testy) jde do spend logu jako
+`(bez aliasu)` — stejně jako na brainu; report to nerozlišuje jako alert.
+
 ## Tajnosti (jen SEZNAM, hodnoty jinde)
 
 `litellm_master_key`, `litellm_salt_key`, `litellm_database_url`,
