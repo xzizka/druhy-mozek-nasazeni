@@ -34,6 +34,23 @@ INFINITY_IMAGE="${INFINITY_IMAGE:-docker.io/michaelf34/infinity:0.0.77}"
 # $0,00007 na dotaz. Jednu fabrikaci (U029) eval sada propustila a chytila
 # ji az tahle kontrola.
 ANSWER_VERIFY="${ANSWER_VERIFY:-0}"
+# Znacka image Krytona. Vychozi "latest" kvuli osobnimu brainu, kde stavi
+# jen jeden clovek a nic se o tu znacku nepere.
+#
+# PROC TO VUBEC JE PARAMETR (2026-09-19). Na komerci se "latest" rozesel:
+# vedle produkcniho buildu se do tehoz tagu postavila rozpracovana varianta
+# s REST API. Bezici kontejner drzi image podle ID, takze navenek se nic
+# nedelo — ale kterykoli restart, pad nebo reboot by produkci TISE preklopil
+# na rozdelanou vetev. Presne ta trida tiche zameny, kvuli ktere je litellm
+# pinnuty na digest a infinity na verzi.
+#
+# Komerce se proto generuje s konkretni znackou (KRYTON_TAG=2026-09-19),
+# takze "latest" muze pri vyvoji volne cestovat a do produkce nedosahne.
+# Po kazdem nasazeni: postav image, otaguj datem, regeneruj s tim datem.
+#
+# retrieval-service:latest ma tentyz tvar a zatim se nerozesel; az bude
+# potreba, patri sem stejny parametr.
+KRYTON_TAG="${KRYTON_TAG:-latest}"
 QD=/etc/containers/systemd
 install -d -m 0755 "$QD"
 
@@ -525,7 +542,7 @@ ContainerName=kryton
 # to spravne a port zacne odmitat spojeni, i kdyz sluzba bezi. Pevna IP
 # tenhle rezim odstrani: duplicitni pravidlo miri na stejnou adresu.
 IP=10.89.7.14
-Image=localhost/kryton:latest
+Image=localhost/kryton:${KRYTON_TAG}
 Network=brain.network
 Volume=${APP_ROOT}/markdown:/data/markdown:Z
 # OPRAVA stejneho bugu jako u litellm: \${PGPW} se neexpanduje.
