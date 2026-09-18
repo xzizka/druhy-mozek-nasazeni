@@ -121,6 +121,45 @@ ANSWER_MIN_RERANK = float(os.environ.get("ANSWER_MIN_RERANK", "0.1"))
 ANSWER_WEAK_RERANK = float(os.environ.get("ANSWER_WEAK_RERANK", "0.02"))
 
 # ---------------------------------------------------------------------------
+# Ověřovací druhé volání (P4 varianta B) — návrh 1 ze seznamu v POZADAVKY P4,
+# zvolený 2026-09-18 poté, co měření vyloučilo prahování.
+# ---------------------------------------------------------------------------
+# CO TO ŘEŠÍ. Práh zahazuje nerelevantní chunky, ale fabrikaci NAD relevantním
+# chunkem nechytí: U017 („v jaké měně je faktura 2026-041") má rerank 0,4995,
+# protože chunk JE ta správná faktura — jen v ní měna není a model napsal
+# „v české koruně [1]". Odpověď se proto po vygenerování pošle podruhé,
+# s úryvky, a ptá se: vyplývá každé tvrzení doslova z nich?
+#
+# TŘI STAVY, NE DVA. Ověření může vyjít OK, CHYBA, nebo NEPROBĚHNOUT (429,
+# timeout, nerozluštitelná odpověď). „Neověřeno" se NESMÍ tvářit jako
+# „ověřeno OK" — proto `stopa["overeno"]` a sloupec `message.overeno` nesou
+# NULL, ne False. Táž úvaha jako u `n_nad_prahem` (NULL vs 0).
+#
+# SELHÁVÁ SE OTEVŘENĚ, ALE NE TICHO. Když ověření nedoběhne, odpověď se
+# uživateli pošle tak jako tak — blokovat odpověď kvůli nedostupnosti
+# kontrolora by z pojistky udělalo nový SPOF (P6). Do logu ale jde WARNING,
+# protože tichá degradace je P8.
+#
+# VÝCHOZÍ VYPNUTO. Osobní provoz se podle plánu nesahá a tohle je změna
+# chování i ceny; na komerci se zapíná přes prostředí (ANSWER_VERIFY=1).
+# Než se zapne natrvalo, patří změřit na účetní sadě — sama kontrola může
+# mít falešně pozitivní nálezy a označit správnou odpověď za fabrikaci.
+ANSWER_VERIFY = os.environ.get("ANSWER_VERIFY", "0") not in ("0", "false", "no")
+
+# `workhorse` (gemma-4-26b) a ne `reasoning`: úloha je rozhodovací, ne
+# tvůrčí, a workhorse je na českých úlohách změřený (medián 3,6 s). Cenu to
+# drží dole — kontrola běží u KAŽDÉ odpovědi, tedy stejně často jako `answer`.
+ANSWER_VERIFY_MODEL = os.environ.get("ANSWER_VERIFY_MODEL", "workhorse")
+
+# Krátký strop: očekává se „OK", nebo „CHYBA" plus jedna věta. Když model
+# začne psát esej, je to samo o sobě signál, že instrukci nepochopil.
+ANSWER_VERIFY_MAX_TOKENS = int(os.environ.get("ANSWER_VERIFY_MAX_TOKENS", "200"))
+
+# Výrazně kratší než ANSWER_TIMEOUT: tohle je přílepek k už hotové odpovědi
+# a uživatel na něj čeká navíc. Radši neověřeno než dvojnásobná latence.
+ANSWER_VERIFY_TIMEOUT = float(os.environ.get("ANSWER_VERIFY_TIMEOUT", "30"))
+
+# ---------------------------------------------------------------------------
 # Dotazy nad deníkem jako celkem (P15): sentiment, nálada, trend
 # ---------------------------------------------------------------------------
 # Proč to nejde přes retrieval: dotaz „jaký je sentiment mých zápisů" je

@@ -598,6 +598,87 @@ def podle_jistoty(hits: list[dict]) -> tuple[list[dict], bool]:
     return slabe, True
 
 
+VERIFY_SYSTEM = (
+    "Dostaneš PODKLADY a ODPOVĚĎ, která z nich měla vzniknout. Tvůj jediný "
+    "úkol je ověřit, jestli každé věcné tvrzení odpovědi DOSLOVA vyplývá "
+    "z podkladů.\n"
+    "Pravidla:\n"
+    "- Číslo, datum, částka, lhůta, měna nebo jméno, které v podkladech "
+    "není, je CHYBA — i kdyby to byla pravda ve skutečném světě.\n"
+    "- Tvrzení silnější, než co podklad říká, je CHYBA. Když podklad uvádí "
+    "použití nějaké hodnoty a odpověď z toho udělá maximum nebo pravidlo, "
+    "je to CHYBA.\n"
+    "- Věta „v podkladech to není“ CHYBA NENÍ, to je správná odpověď.\n"
+    "- Sloh, formulace ani úplnost tě nezajímají. Jen opora v podkladech.\n"
+    "Odpověz PŘESNĚ takto:\n"
+    "první řádek: OK nebo CHYBA\n"
+    "druhý řádek (jen u CHYBA): které tvrzení a proč, jednou větou."
+)
+
+
+def over_odpoved(text: str, podklady: str) -> tuple[bool | None, str]:
+    """Druhé volání modelu: vyplývá každé tvrzení odpovědi z podkladů?
+
+    Návrh 1 z POZADAVKY P4, zvolený poté, co měření na účetní sadě vyloučilo
+    prahování (`ANSWER_MIN_RERANK` nechytí fabrikaci nad RELEVANTNÍM chunkem,
+    protože skóre měří vztah chunku k dotazu, ne přítomnost faktu).
+
+    Vrací `(verdikt, duvod)`, kde verdikt je TROJSTAVOVÝ:
+      `True`  — tvrzení mají oporu,
+      `False` — kontrola našla tvrzení bez opory, `duvod` říká které,
+      `None`  — kontrola NEPROBĚHLA (chyba volání, nerozluštitelný výstup).
+
+    `None` se nesmí slít s `True`. „Neověřeno" a „ověřeno OK" jsou dvě různé
+    věci a v denním reportu se musí dát rozlišit — jinak by výpadek kontroly
+    vypadal jako samé čisté odpovědi. Táž úvaha jako u `n_nad_prahem`.
+
+    SELHÁVÁ SE OTEVŘENĚ. Když volání spadne, vrátí se `None` a odpověď jde
+    uživateli tak jako tak: blokovat ji kvůli nedostupnému kontrolorovi by
+    z pojistky udělalo nový SPOF (P6). Do logu ale jde WARNING, protože
+    tichá degradace je přesně P8.
+
+    PARSUJE SE PRVNÍ ŘÁDEK, NE KLÍČOVÁ SLOVA V TEXTU. Hledat „CHYBA" kdekoliv
+    v odpovědi by znamenalo měřit formulaci místo rozhodnutí — na to projekt
+    najel 2026-08-18 třikrát za jediný den (detektor fabrikace nahlásil 1 ze 3,
+    skutečnost byla 2 ze 3). Když první řádek nedává ani OK, ani CHYBA, je to
+    `None`, ne odhad.
+    """
+    if not podklady.strip():
+        return None, "bez podkladů není co ověřovat"
+    try:
+        r = httpx.post(
+            config.LITELLM_URL.rstrip("/") + "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {config.LITELLM_API_KEY}"},
+            json={"model": config.ANSWER_VERIFY_MODEL,
+                  "messages": [
+                      {"role": "system", "content": VERIFY_SYSTEM},
+                      {"role": "user",
+                       "content": f"PODKLADY:\n{podklady}\n\nODPOVĚĎ:\n{text}"},
+                  ],
+                  "max_tokens": config.ANSWER_VERIFY_MAX_TOKENS,
+                  "timeout": config.ANSWER_VERIFY_TIMEOUT},
+            timeout=config.ANSWER_VERIFY_TIMEOUT + config.ANSWER_TIMEOUT_MARGIN)
+        if r.status_code != 200:
+            log.warning("overeni odpovedi neprobehlo: LiteLLM %d: %s",
+                        r.status_code, r.text[:200])
+            return None, "kontrola nedostupná"
+        out = (r.json()["choices"][0]["message"].get("content") or "").strip()
+    except Exception as e:                       # noqa: BLE001 — fail open
+        log.warning("overeni odpovedi neprobehlo: %r", e)
+        return None, "kontrola selhala"
+
+    radky = [x.strip() for x in out.splitlines() if x.strip()]
+    prvni = radky[0].upper() if radky else ""
+    duvod = radky[1] if len(radky) > 1 else ""
+    if prvni.startswith("OK"):
+        return True, ""
+    if prvni.startswith("CHYBA"):
+        log.warning("overeni naslo tvrzeni bez opory: %s", duvod or out[:200])
+        return False, duvod or "kontrola neuvedla důvod"
+    log.warning("overeni vratilo nerozlustitelny vystup: %s", out[:200])
+    return None, "kontrola odpověděla mimo tvar"
+
+
 def zkontroluj_fallback(pozadovany: str, vraceny: str) -> bool:
     """WARNING do logu, když odpověď přišla od jiného modelu, než jsme chtěli.
 
@@ -652,7 +733,8 @@ class Odpoved(NamedTuple):
 
 def _stopa(kandidatu: int, nad_prahem: int, max_rerank: float | None,
            odmitnuto: bool, fallback: bool, odseknuto: bool = False,
-           denik_dni: int | None = None, slaba_opora: bool = False) -> dict:
+           denik_dni: int | None = None, slaba_opora: bool = False,
+           overeno: bool | None = None) -> dict:
     """`odseknuto`, `denik_dni` i `slaba_opora` mají default, protože
     v předčasném návratu (nic nad prahem) nemají co říct: model se nezavolal,
     takže se nemá kde odseknout, deníkový blok se do `extra` nedostal — jinak
@@ -661,11 +743,15 @@ def _stopa(kandidatu: int, nad_prahem: int, max_rerank: float | None,
     `slaba_opora` je tu proto, že bez ní by dvoustupňové odmítnutí bylo
     z reportu k nerozeznání od normální odpovědi: `odmitnuto` je False,
     `n_nad_prahem` nenulové, `max_rerank` nízké. Přesně ten druh rozdílu,
-    který se podle P8 musí dát vyčíst z dat, ne hádat z textu odpovědi."""
+    který se podle P8 musí dát vyčíst z dat, ne hádat z textu odpovědi.
+
+    `overeno` je TROJSTAVOVÉ (True/False/None) a jeho default je None,
+    protože „neověřeno" není totéž co „ověřeno OK" — viz `over_odpoved()`."""
     return {"n_kandidatu": kandidatu, "n_nad_prahem": nad_prahem,
             "max_rerank": max_rerank, "odmitnuto": odmitnuto,
             "fallback": fallback, "odseknuto": odseknuto,
-            "denik_dni": denik_dni, "slaba_opora": slaba_opora}
+            "denik_dni": denik_dni, "slaba_opora": slaba_opora,
+            "overeno": overeno}
 
 
 def zaznamenej(kanal: str, dotaz: str, odp: "Odpoved | None",
@@ -861,9 +947,28 @@ def answer(query: str, hits: list[dict], prior: list[dict] | None = None,
                     "cela odpoved: %s", strop, denik_dnu, text)
         text += ("\n\n⚠️ Odpověď je odseknutá na limitu %d tokenů — "
                  "zužte období nebo otázku." % strop)
+
+    # Ověřovací druhé volání (P4 varianta B). Ověřuje se proti TÝMŽ podkladům,
+    # které dostal model — tedy včetně `extra`, ne jen proti úryvkům. Ověřená
+    # čísla z P1b a deníkové bloky v `ctx` nejsou, takže by je kontrola bez
+    # nich hlásila jako tvrzení bez opory a zahltila by falešnými nálezy.
+    #
+    # Varování se PŘIPOJUJE, odpověď se nemaže. Kontrola sama může mít falešně
+    # pozitivní nález a schovat správnou odpověď by uživateli vzalo možnost
+    # posoudit ji podle citací. Přiznaná pochybnost je přesně to, co tenhle
+    # projekt staví proti věrohodnému nesmyslu — stejný vzorec jako `odseknuto`
+    # o pár řádků výš.
+    overeno = None
+    if config.ANSWER_VERIFY:
+        podklady = ((extra + "\n\n") if extra else "") + ctx
+        overeno, duvod = over_odpoved(text, podklady)
+        if overeno is False:
+            text += ("\n\n⚠️ Ověření odpovědi neprošlo: %s — ber ji jako "
+                     "nepodloženou a zkontroluj zdroj." % duvod)
+
     return Odpoved(text, d.get("model", config.ANSWER_MODEL), ms,
                    _stopa(kandidatu, len(hits), nejlepsi, False, propadl,
-                          odseknuto, denik_dnu, slaba_opora))
+                          odseknuto, denik_dnu, slaba_opora, overeno))
 
 
 # ---------------------------------------------------------------------------

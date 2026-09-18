@@ -150,6 +150,13 @@ ALTER TABLE message ADD COLUMN IF NOT EXISTS denik_dni    int;
 -- nemám věřit" by nešlo z reportu vůbec spočítat.
 ALTER TABLE message ADD COLUMN IF NOT EXISTS slaba_opora  boolean;
 
+-- Ověřovací druhé volání (2026-09-18, P4 varianta B). TROJSTAVOVÉ:
+-- TRUE = kontrola našla oporu pro všechna tvrzení, FALSE = našla tvrzení
+-- bez opory, NULL = kontrola NEPROBĚHLA (vypnutá, spadlá, nerozluštitelná).
+-- Slít NULL s TRUE by znamenalo, že výpadek kontroly vypadá v reportu jako
+-- samé čisté odpovědi — tedy P8 znovu, jen o patro výš.
+ALTER TABLE message ADD COLUMN IF NOT EXISTS overeno      boolean;
+
 -- Report se ptá „co bylo za posledních N hodin" napříč konverzacemi.
 -- Bez tohohle indexu je to seq scan přes celou tabulku.
 CREATE INDEX IF NOT EXISTS message_created_ix ON message (created_at);
@@ -215,13 +222,15 @@ def add_message(conversation_id, role: str, content: str, citations=None,
         return conn.execute(
             "INSERT INTO message (conversation_id, role, content, citations, model, "
             "                     latency_ms, n_kandidatu, n_nad_prahem, max_rerank, "
-            "                     odmitnuto, fallback, odseknuto, denik_dni, slaba_opora) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            "                     odmitnuto, fallback, odseknuto, denik_dni, slaba_opora, "
+            "                     overeno) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (conversation_id, role, content, json.dumps(citations or []),
              model, latency_ms, s.get("n_kandidatu"), s.get("n_nad_prahem"),
              s.get("max_rerank"), s.get("odmitnuto"),
              s.get("fallback"), s.get("odseknuto"),
-             s.get("denik_dni"), s.get("slaba_opora"))).fetchone()[0]
+             s.get("denik_dni"), s.get("slaba_opora"),
+             s.get("overeno"))).fetchone()[0]
 
 
 # Jmenný prostor pro deterministická UUID konverzací z kanálů bez vlastního

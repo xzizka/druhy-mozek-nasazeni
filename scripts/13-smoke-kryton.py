@@ -1154,6 +1154,77 @@ try:
               "SLABOU VAZBU" not in _zachyceno["messages"][-1]["content"])
     finally:
         core.config.ANSWER_WEAK_RERANK = _puv_slaby2
+
+    # ---------------------------------------------------------------
+    # Ověřovací druhé volání (P4 varianta B, 2026-09-18). Fabrikaci NAD
+    # relevantním chunkem práh nechytí — U017 má rerank 0,4995, protože
+    # chunk JE ta správná faktura, jen v ní měna není.
+    #
+    # Vlastní `post`: `_fake_post` výš odpovídá stejně na obě volání, takže
+    # by verdikt vyšel nerozluštitelný. Tady se rozlišuje podle aliasu.
+    # ---------------------------------------------------------------
+    _puv_verify = core.config.ANSWER_VERIFY
+    _verdikt = ["OK"]
+    _volani = []
+
+    class _FakeVerifyR:
+        status_code = 200
+
+        def __init__(self, obsah, model):
+            self._o, self._m = obsah, model
+
+        def json(self):
+            return {"model": self._m,
+                    "choices": [{"message": {"content": self._o},
+                                 "finish_reason": "stop"}]}
+
+    def _fake_post_verify(url, headers=None, json=None, timeout=None):
+        je_overeni = json["model"] == core.config.ANSWER_VERIFY_MODEL
+        _volani.append("ověření" if je_overeni else "odpověď")
+        if je_overeni:
+            return _FakeVerifyR(_verdikt[0], core.config.ANSWER_VERIFY_MODEL)
+        return _FakeVerifyR("Faktura je v české koruně [1].", "reasoning")
+
+    core.httpx.post = _fake_post_verify
+    core.config.ANSWER_VERIFY = True
+    _FAKTURA = {"chunk_id": "f1", "source_path": "fak-2026-041.md",
+                "content": "Faktura 2026-041, částka 48 400",
+                "rerank_score": 0.4995, "heading_path": None}
+    try:
+        _verdikt[0] = "CHYBA\nMěna v podkladech uvedena není."
+        _o = _PUVODNI_ANSWER("V jaké měně je faktura 2026-041?", [dict(_FAKTURA)])
+        check("U017: fabrikace nad relevantním chunkem se najde",
+              _o.stopa["overeno"] is False, str(_o.stopa))
+        check("varování se připojí, ale odpověď se NEMAŽE",
+              "Ověření odpovědi neprošlo" in _o.text and "koruně" in _o.text,
+              _o.text)
+        check("volalo se dvakrát: odpověď + ověření",
+              _volani == ["odpověď", "ověření"], str(_volani))
+
+        _verdikt[0] = "OK"
+        _o = _PUVODNI_ANSWER("Jaká je částka?", [dict(_FAKTURA)])
+        check("čistá odpověď projde bez varování",
+              _o.stopa["overeno"] is True and "Ověření" not in _o.text,
+              str(_o.stopa))
+
+        # Nerozluštitelný verdikt NENÍ důvod hádat. Klíčová slova měří
+        # formulaci, ne rozhodnutí — projekt na to 2026-08-18 najel třikrát
+        # za den (detektor fabrikace hlásil 1 ze 3, skutečnost byla 2 ze 3).
+        _verdikt[0] = "Myslím, že je to spíš chyba, ale nejsem si jistý."
+        _o = _PUVODNI_ANSWER("Jaká je částka?", [dict(_FAKTURA)])
+        check("nerozluštitelný verdikt dá None, ne odhad z klíčových slov",
+              _o.stopa["overeno"] is None and "Ověření" not in _o.text,
+              str(_o.stopa))
+
+        _volani.clear()
+        core.config.ANSWER_VERIFY = False
+        _o = _PUVODNI_ANSWER("Jaká je částka?", [dict(_FAKTURA)])
+        check("ANSWER_VERIFY=0: kontrola se vůbec nevolá",
+              _volani == ["odpověď"] and _o.stopa["overeno"] is None,
+              str(_volani))
+    finally:
+        core.config.ANSWER_VERIFY = _puv_verify
+        core.httpx.post = _fake_post
 finally:
     core.httpx.post = _puv_post
     core.config.ANSWER_MIN_RERANK = _puv_prah2

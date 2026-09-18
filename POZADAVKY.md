@@ -513,6 +513,41 @@ Neřeší variantu B, řeší opačnou chybu, kterou totéž měření odhalilo 
 dokument v korpusu byl. V pásmu 0,02–0,1 se nově odpoví s výslovnou výhradou,
 pod 0,02 se mlčí dál. Podrobně `druhymozek_rag/PRED-D8.md`.
 
+### Rozhodnutí 2026-09-18: jde se návrhem 1 (ověřovací druhé volání)
+
+Ze tří návrhů výše zvolen **návrh 1**. Návrh 2 (zpřísnit SYSTEM prompt) padl
+už měřením z 08-18 a návrh 3 (nechat být) je neudržitelný ve chvíli, kdy má
+nad dokumenty pracovat účetní firma — vymyšlená částka ve smlouvě je jiná
+kategorie než vymyšlený rok u zákona v osobních poznámkách.
+
+**Implementováno** (`core.over_odpoved()`, `ANSWER_VERIFY`): po vygenerování
+jde odpověď spolu s podklady podruhé do modelu (`workhorse`) s otázkou, jestli
+každé tvrzení doslova vyplývá z podkladů. Ověřuje se proti TÝMŽ podkladům,
+které dostal generující model, tedy včetně `extra` — ověřená čísla z P1b
+a deníkové bloky v úryvcích nejsou a kontrola by je jinak hlásila jako tvrzení
+bez opory.
+
+Tři vlastnosti, na kterých to stojí:
+
+- **Trojstavový výsledek.** `True` / `False` / `None`, kde `None` je
+  „kontrola neproběhla". Slít ho s `True` by znamenalo, že výpadek kontroly
+  vypadá v reportu jako samé čisté odpovědi — P8 znovu, o patro výš.
+- **Selhává otevřeně, ale ne tiše.** Když volání spadne (429, timeout),
+  odpověď jde uživateli tak jako tak; blokovat ji kvůli nedostupnému
+  kontrolorovi by z pojistky udělalo nový SPOF (P6). Do logu jde WARNING.
+- **Parsuje se první řádek, ne klíčová slova.** Hledat „CHYBA" kdekoliv
+  v textu by měřilo formulaci místo rozhodnutí — na to tenhle projekt najel
+  2026-08-18 třikrát za jediný den. Nerozluštitelný výstup je `None`, ne odhad.
+
+Varování se k odpovědi **připojuje**, odpověď se nemaže: kontrola sama může
+mít falešně pozitivní nález a schovat správnou odpověď by uživateli vzalo
+možnost posoudit ji podle citací.
+
+**VÝCHOZÍ VYPNUTO** (`ANSWER_VERIFY=0`). Osobní provoz se podle plánu
+komercializace nesahá, a než se zapne natrvalo, patří změřit na účetní sadě
+falešně pozitivní nálezy — dnes je ověřená jen mechanika (15 asercí), ne
+kvalita verdiktů. To je první úkol po nasazení na komerci.
+
 Souvisí: P10 (Whisper halucinuje na vstupu — tatáž kategorie tichého
 selhání, jen na druhém konci pipeline), P12 (přeměření na větším korpusu —
 tahle podmínka se tím splnila).
