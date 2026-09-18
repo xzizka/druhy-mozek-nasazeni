@@ -24,6 +24,16 @@ BACKUP_S3_PREFIX="${BACKUP_S3_PREFIX:-db-backups/}"
 # komerci staci CPU-only varianta (~0,75 GB), ktera se navic stahne z
 # Docker Hubu spolehliveji. Obe bezi s `--engine torch --device cpu`.
 INFINITY_IMAGE="${INFINITY_IMAGE:-docker.io/michaelf34/infinity:0.0.77}"
+# Overovaci druhe volani (P4 varianta B, `core.over_odpoved()`). Vychozi 0,
+# takze osobni brain bezi jako dosud; komerce si ho zapina. Duvod pro ten
+# rozdil: vymyslene cislo ve smlouve je u ucetni firmy jina kategorie nez
+# vymysleny rok u zakona v osobnich poznamkach.
+#
+# Zmereno 2026-09-19 na ucetni sade (druhymozek_rag/uat/overeni-vysledky.md):
+# 0 falesne pozitivnich ze 41 overenych odpovedi, +968 ms medianu,
+# $0,00007 na dotaz. Jednu fabrikaci (U029) eval sada propustila a chytila
+# ji az tahle kontrola.
+ANSWER_VERIFY="${ANSWER_VERIFY:-0}"
 QD=/etc/containers/systemd
 install -d -m 0755 "$QD"
 
@@ -523,8 +533,13 @@ Secret=kryton_database_url,type=env,target=DATABASE_URL
 Environment=RETRIEVAL_URL=http://retrieval:8080
 Environment=LITELLM_URL=http://litellm:4000
 Environment=MARKDOWN_ROOT=/data/markdown
-# LLM klic omezeny na reasoning/workhorse/cheap/cheap-fallback/backstop,
-# rozpocet 20 USD / 30 dni.
+# Overovaci druhe volani (P4 varianta B). Hodnota z promenne nahore: osobni
+# brain 0, komerce 1. Alias `verify` MUSI byt v seznamu modelu klice (nize),
+# jinak kontrola skonci na 403 a `over_odpoved()` vrati None — tedy tise
+# neoveřeno misto ochrany.
+Environment=ANSWER_VERIFY=${ANSWER_VERIFY}
+# LLM klic omezeny na reasoning/workhorse/cheap/cheap-fallback/backstop
+# a `verify`, rozpocet 20 USD / 30 dni.
 #
 # POZOR, TENHLE SEZNAM MUSI OBSAHOVAT CELY FALLBACK RETEZ. Zjisteno
 # 2026-09-09: klic mel jen reasoning/workhorse/cheap/cheap-fallback, takze
