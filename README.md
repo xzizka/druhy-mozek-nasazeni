@@ -218,7 +218,7 @@ Místo toho:
 
 | co | čím |
 |---|---|
-| stopa u každé odpovědi | `message.n_kandidatu`, `n_nad_prahem`, `max_rerank`, `odmitnuto`, `fallback` — plní `core.answer()` |
+| stopa u každé odpovědi | `message.n_kandidatu`, `n_nad_prahem`, `max_rerank`, `odmitnuto`, `fallback`, `slaba_opora` — plní `core.answer()` |
 | denní pohled a alerty | `scripts/31-denni-report.py` |
 | regresní sada | `eval/zlata-sada.json` + `scripts/32-zlata-sada.py` |
 

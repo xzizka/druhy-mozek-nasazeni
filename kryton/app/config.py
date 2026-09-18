@@ -83,7 +83,42 @@ CONTEXT_CHUNKS = int(os.environ.get("CONTEXT_CHUNKS", "8"))
 # PROVIZORNÍ ČÍSLO: korpus měl při měření 13 dokumentů a 19 chunků, takže
 # střední pásmo 0,05–0,5 (zásahy slabé, ale ještě užitečné) v něm skoro
 # nemá jak vzniknout — 2 skóre z 84. Po nárůstu korpusu pusť skript znovu.
+#
+# PŘEMĚŘENO 2026-09-18 a mezera se NEPOTVRDILA — viz ANSWER_WEAK_RERANK níž.
 ANSWER_MIN_RERANK = float(os.environ.get("ANSWER_MIN_RERANK", "0.1"))
+
+# Dolní hranice dvoustupňového odmítnutí (návrh z D6, zaveden 2026-09-18).
+#
+# PŘEMĚŘENO NA ÚČETNÍM KORPUSU, jak si žádal odstavec výše — 48 dotazů nad
+# 27 chunky, `druhymozek_rag/uat/prah-analyza.py`. Mezeru z osobního korpusu
+# to nepotvrdilo, naopak vyvrátilo:
+#
+#   osobní korpus (16 dotazů):  trefy 0,332–0,998 | šum 0,000017–0,021
+#   účetní korpus (48 dotazů):  trefy 0,0014–0,999 | šum 0,0012–0,4995
+#
+# Pásma se překrývají po celé délce, takže „bezpečný řez" na účetních datech
+# NEEXISTUJE. Práh 0,1 na nich odmítne 7 ze 42 zodpověditelných dotazů, a jsou
+# to typicky ty nejcennější („kde najdu ceník", „jaká je sazba DPČ") —
+# parafráze, kterým reranker dá nízké skóre, i když dokument v korpusu leží.
+#
+# PROČ TEDY DVA PRAHY A NE JEDEN NIŽŠÍ. Protože ty dvě chyby nejsou
+# souměřitelné. Falešné „nenalezeno" účetní otráví (zeptá se jinak), kdežto
+# tiché odpovězení ze šumu je přesně P4. Dvoustupňové řešení drží obojí: nad
+# ANSWER_MIN_RERANK se odpovídá normálně, v pásmu mezi prahy se odpoví
+# s VÝSLOVNOU výhradou o slabé opoře, pod ANSWER_WEAK_RERANK se mlčí dál.
+# Uživatel dostane „tohle jsem našel, ale nejsem si jistý" místo „nic jsem
+# nenašel", což je u dohledatelného dokumentu prostě nepravda.
+#
+# 0,02 je spodek pásma, ve kterém na měření ještě ležely skutečné trefy
+# (0,0438 až 0,0889); pod ním už byly jen U038/U042/U043 se skóre 0,0014 až
+# 0,0080, tedy nerozeznatelné od šumu. Hodnota 0 mechanismus vypne a chování
+# se vrátí k jedinému prahu.
+#
+# NEŘEŠÍ P4 VARIANTU B, a to je potřeba říct nahlas. Dotaz U017 („v jaké měně
+# je faktura 2026-041") má skóre 0,4995 — chunk JE ta správná faktura, jen
+# v ní měna není a model si ji vymyslel. Takový případ neutne žádný práh;
+# na to je potřeba kontrola tvrzení proti citovanému úryvku, ne prahování.
+ANSWER_WEAK_RERANK = float(os.environ.get("ANSWER_WEAK_RERANK", "0.02"))
 
 # ---------------------------------------------------------------------------
 # Dotazy nad deníkem jako celkem (P15): sentiment, nálada, trend

@@ -101,8 +101,32 @@ CREATE INDEX IF NOT EXISTS chunk_tsv_gin ON retrieval.chunk USING gin (content_t
 -- Lexikální větev je per jazyk ZÁMĚRNĚ: dotaz stemmovaný anglicky nemá
 -- proti českému tsvectoru co dělat, a předstírat opak by dávalo falešné
 -- shody.
+--
+-- DROP PŘED CREATE, A TO JE OPRAVA Z 2026-09-18. Tady stálo `CREATE OR
+-- REPLACE`, jenže `p_ts_config` je parametr NAVÍC proti verzi z 02 — a to
+-- v Postgresu není náhrada, ale PŘETÍŽENÍ. Po doběhnutí 03 tedy v katalogu
+-- ležely obě funkce vedle sebe a `GRANT EXECUTE ON FUNCTION
+-- retrieval.hybrid_search` o pár řádků níž (bez seznamu argumentů) spadl
+-- na `function name "retrieval.hybrid_search" is not unique`. Migrace se
+-- přitom deklarovala jako idempotentní.
+--
+-- 04 tenhle stav neuklidilo: jeho `DROP` míří na DESETIARGUMENTOVÝ podpis,
+-- tedy na verzi z 03, kdežto devítiargumentová z 02 mu proklouzne. Do D6
+-- to nikdo nepoznal jen proto, že `04-init-db.sh` 03 ani 04 vůbec nepouštěl
+-- a na komerci se dodělávaly ručně — tam se stará verze dropla po ruce.
+--
+-- Dropují se OBA známé podpisy: z 02 (bez p_ts_config) i vlastní (s ním),
+-- aby šla migrace pustit znovu. Cena za druhý DROP je, že spuštění 03
+-- samotného nad instancí po 04 SHODÍ `ordinal` a context expand přestane
+-- fungovat — proto se 03 a 04 pouští vždycky jako dvojice a `05-verify.sql`
+-- na chybějící `ordinal` hlídá.
 -- ---------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION retrieval.hybrid_search(
+DROP FUNCTION IF EXISTS retrieval.hybrid_search(
+    halfvec, text, int, int, int, real, real, real, smallint);
+DROP FUNCTION IF EXISTS retrieval.hybrid_search(
+    halfvec, text, int, int, int, real, real, real, smallint, regconfig);
+
+CREATE FUNCTION retrieval.hybrid_search(
     p_embedding   halfvec(1024),
     p_query       text,
     p_limit       int  DEFAULT 20,

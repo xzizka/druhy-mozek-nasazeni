@@ -975,7 +975,15 @@ print("== stopa odpovědi (P4/P7-B/P8: co v textu odpovědi vidět není) ==")
 # ani jeden chunk, funkce se vrátí dřív, než by zavolala LiteLLM — a právě
 # tahle větev je P7-B.
 _puv_prah = core.config.ANSWER_MIN_RERANK
+_puv_slaby = core.config.ANSWER_WEAK_RERANK
 core.config.ANSWER_MIN_RERANK = 0.1
+# Slabé pásmo se tu VYPÍNÁ schválně. 0,0215 je historická hodnota z incidentu
+# P7-B a od 2026-09-18 padá do pásma dvoustupňového odmítnutí (0,02–0,1),
+# takže by se nově odpovědělo s výhradou — tedy jiná větev, než kterou tenhle
+# blok ověřuje. Chování jednoho prahu nikam nezmizelo (ANSWER_WEAK_RERANK=0
+# ho vrací) a je to pořád ta větev, ve které se NEVOLÁ model; proto se testuje
+# dál, jen výslovně. Pásmo má vlastní blok hned pod tímhle.
+core.config.ANSWER_WEAK_RERANK = 0.0
 _slabe = [dict(HIT, chunk_id="c9", rerank_score=0.0215)]
 _odp = _PUVODNI_ANSWER("temporální dotaz", _slabe)
 check("pod prahem se neodpoví a stopa to řekne",
@@ -985,7 +993,18 @@ check("max_rerank se bere PŘED filtrem, jinak by v P7-B bylo None",
       _odp.stopa["max_rerank"] == 0.0215, str(_odp.stopa))
 check("n_kandidatu je počet PŘED filtrem", _odp.stopa["n_kandidatu"] == 1,
       str(_odp.stopa))
+
+# Dvoustupňové odmítnutí (2026-09-18). Pod SPODNÍM prahem se mlčí dál — to je
+# nejdůležitější aserce celého mechanismu, protože právě tady by se z něj
+# nedopatřením stalo obyčejné snížení prahu a ochrana P4 by padla.
+core.config.ANSWER_WEAK_RERANK = 0.02
+_odp = _PUVODNI_ANSWER("dotaz nad samým šumem",
+                       [dict(HIT, chunk_id="c9", rerank_score=0.0014)])
+check("pod ANSWER_WEAK_RERANK se mlčí dál (ochrana P4 beze změny)",
+      _odp.stopa["odmitnuto"] is True and _odp.stopa["slaba_opora"] is False,
+      str(_odp.stopa))
 core.config.ANSWER_MIN_RERANK = _puv_prah
+core.config.ANSWER_WEAK_RERANK = _puv_slaby
 
 check("stopa dojde až do db.add_message (webová cesta /dotaz)",
       any(m.get("stopa") and m["stopa"].get("max_rerank") == 0.987
@@ -1102,6 +1121,39 @@ try:
     _o = _PUVODNI_ANSWER("Jaký je sentiment mých zápisů?", [dict(_SUM)])
     check("dokončená odpověď se jako odseknutá NEoznačí",
           not _o.stopa["odseknuto"] and "odseknutá" not in _o.text, _o.text)
+
+    # ---------------------------------------------------------------
+    # Dvoustupňové odmítnutí (D6 návrh, zavedeno 2026-09-18). Tady už je
+    # `httpx.post` zastubovaný, takže jde ověřit i větev, která model VOLÁ.
+    # ---------------------------------------------------------------
+    _puv_slaby2 = core.config.ANSWER_WEAK_RERANK
+    core.config.ANSWER_WEAK_RERANK = 0.02
+    try:
+        # U010 (0,0829) a U031 (0,0889) z účetní sady: dokument v korpusu je,
+        # práh 0,1 ho přesto utnul a uživatel dostal „nic jsem nenašel".
+        _o = _PUVODNI_ANSWER("Jaká je sazba DPČ?",
+                             [dict(_SUM, rerank_score=0.0829)])
+        check("pásmo 0,02–0,1: odpoví se místo mlčení",
+              not _o.stopa["odmitnuto"] and _o.stopa["slaba_opora"] is True,
+              str(_o.stopa))
+        check("výhrada o slabé opoře jde do promptu, ne až do textu odpovědi",
+              "SLABOU VAZBU" in _zachyceno["messages"][-1]["content"],
+              _zachyceno["messages"][-1]["content"][:200])
+
+        # Nejpodstatnější aserce: slabé chunky se NEPŘIMÍCHÁVAJÍ k dobré
+        # trefě. Kdyby ano, byl by to přesně mechanismus P4 — jedna dobrá
+        # citace a k ní pár chunků těsně nad šumem, ke kterým si model
+        # připíše číslo.
+        _o = _PUVODNI_ANSWER("Co je halfvec?",
+                             [dict(_SUM, chunk_id="dobry", rerank_score=0.9),
+                              dict(_SUM, chunk_id="slaby", rerank_score=0.05)])
+        check("silná trefa nedostane slabé chunky k sobě (ochrana P4)",
+              _o.stopa["n_nad_prahem"] == 1 and _o.stopa["slaba_opora"] is False,
+              str(_o.stopa))
+        check("bez slabé opory se výhrada do promptu nedostane",
+              "SLABOU VAZBU" not in _zachyceno["messages"][-1]["content"])
+    finally:
+        core.config.ANSWER_WEAK_RERANK = _puv_slaby2
 finally:
     core.httpx.post = _puv_post
     core.config.ANSWER_MIN_RERANK = _puv_prah2

@@ -29,32 +29,32 @@ echo "== 02-retrieval.sql: česká FTS, schéma, indexy, hybrid_search =="
 $PG -U postgres -d retrieval -f /sql/02-retrieval.sql
 
 # ---------------------------------------------------------------------
+# Migrace nad základem. DO 2026-09-18 SE TYHLE DVA SOUBORY NEPOUŠTĚLY —
+# init končil na 02 a 03/04 zůstávaly na operátorovi, který o nich musel
+# vědět. Komerční instance tak dva dny běžela na schématu bez `document.lang`
+# a nikdo si toho nevšiml, protože prázdný korpus na ten sloupec nesáhne
+# (D6, 2026-09-17). Obojí je idempotentní, takže je správně pustit vždycky.
+#
+# Pořadí je závazné: 04 dropuje a znovu staví `hybrid_search` na podpisu,
+# který zavádí 03.
+# ---------------------------------------------------------------------
+echo "== 03-multilang.sql: jazyk per dokument, ts_config per chunk =="
+$PG -U postgres -d retrieval -f /sql/03-multilang.sql
+
+echo "== 04-context-expand.sql: hybrid_search vrací ordinal =="
+$PG -U postgres -d retrieval -f /sql/04-context-expand.sql
+
+# ---------------------------------------------------------------------
 # Ověření, že to celé skutečně funguje. Tenhle test je tu proto, že
 # selhání české FTS konfigurace je tiché - lexikální větev prostě
 # přestane nacházet a projeví se to jako "špatný retrieval", ne jako chyba.
+#
+# Aserce žijí v `sql/05-verify.sql`, aby šla táž kontrola pustit i jindy než
+# při initu (`scripts/41-schema-check.sh`). Blok, který tu stál dřív, ověřoval
+# stav PO 02 — tedy přesně to, co 02 vytvoří — takže chybějící 03/04 mlčky
+# prošly. Tím se z ověření stalo razítko a díra z D6 dva dny vydržela.
 # ---------------------------------------------------------------------
 echo "== ověření =="
-podman exec -i postgres psql -X -U postgres -d retrieval -tA <<'SQL'
-\set ON_ERROR_STOP on
-DO $$
-DECLARE tsv text; n int;
-BEGIN
-    SELECT to_tsvector('czech','Ladím latenci vektorových indexů')::text INTO tsv;
-    IF tsv NOT LIKE '%ladit%' OR tsv NOT LIKE '%latence%' THEN
-        RAISE EXCEPTION 'ceska lemmatizace NEFUNGUJE: %', tsv;
-    END IF;
-
-    SELECT count(*) INTO n FROM pg_indexes
-     WHERE schemaname='retrieval'
-       AND indexname IN ('chunk_embedding_hnsw','chunk_tsv_gin','chunk_trgm_gin');
-    IF n <> 3 THEN RAISE EXCEPTION 'chybi indexy, naslo se %', n; END IF;
-
-    PERFORM retrieval.hybrid_search(
-        (SELECT ('['||string_agg('0.01',',')||']')::halfvec(1024)
-           FROM generate_series(1,1024)), 'test', 1);
-
-    RAISE NOTICE 'OK: FTS %, indexy 3/3, hybrid_search volatelna', tsv;
-END $$;
-SQL
+$PG -U postgres -d retrieval -f /sql/05-verify.sql
 
 echo "== hotovo. Dále: systemctl start infinity litellm retrieval kryton =="

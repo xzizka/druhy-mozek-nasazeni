@@ -143,6 +143,13 @@ ALTER TABLE message ADD COLUMN IF NOT EXISTS fallback     boolean;
 ALTER TABLE message ADD COLUMN IF NOT EXISTS odseknuto    boolean;
 ALTER TABLE message ADD COLUMN IF NOT EXISTS denik_dni    int;
 
+-- Dvoustupňové odmítnutí (2026-09-18). TRUE = nad ANSWER_MIN_RERANK neleželo
+-- nic a odpověď stojí na slabém pásmu, tedy s výhradou v textu. Bez sloupce
+-- by takový případ byl v datech od normální odpovědi k nerozeznání
+-- (`odmitnuto` False, `n_nad_prahem` nenulové) a podíl „odpovědí, kterým
+-- nemám věřit" by nešlo z reportu vůbec spočítat.
+ALTER TABLE message ADD COLUMN IF NOT EXISTS slaba_opora  boolean;
+
 -- Report se ptá „co bylo za posledních N hodin" napříč konverzacemi.
 -- Bez tohohle indexu je to seq scan přes celou tabulku.
 CREATE INDEX IF NOT EXISTS message_created_ix ON message (created_at);
@@ -208,13 +215,13 @@ def add_message(conversation_id, role: str, content: str, citations=None,
         return conn.execute(
             "INSERT INTO message (conversation_id, role, content, citations, model, "
             "                     latency_ms, n_kandidatu, n_nad_prahem, max_rerank, "
-            "                     odmitnuto, fallback, odseknuto, denik_dni) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            "                     odmitnuto, fallback, odseknuto, denik_dni, slaba_opora) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (conversation_id, role, content, json.dumps(citations or []),
              model, latency_ms, s.get("n_kandidatu"), s.get("n_nad_prahem"),
              s.get("max_rerank"), s.get("odmitnuto"),
              s.get("fallback"), s.get("odseknuto"),
-             s.get("denik_dni"))).fetchone()[0]
+             s.get("denik_dni"), s.get("slaba_opora"))).fetchone()[0]
 
 
 # Jmenný prostor pro deterministická UUID konverzací z kanálů bez vlastního

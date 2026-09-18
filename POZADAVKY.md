@@ -481,8 +481,41 @@ celé odpovědi a skóre je jen vodítko.
 3. **Nechat být** a spolehnout se, že uživatel citace kontroluje. Legitimní
    u systému pro jednoho člověka, ale pak by to mělo být rozhodnuté.
 
+### Stav k 2026-09-18 — prahování variantu B vyloučeno měřením
+
+Komentář u `ANSWER_MIN_RERANK` označoval práh 0,1 za PROVIZORNÍ ČÍSLO
+a ukládal přeměřit na větším korpusu. Přeměřeno na účetní vertikále
+(48 dotazů, 27 chunků, `druhymozek_rag/uat/prah-analyza.py`) a výsledek
+vyvrací předpoklad, na kterém práh stál:
+
+| korpus | trefy | šum |
+|---|---|---|
+| osobní, 13 dok. / 19 chunků (08-17) | 0,332 – 0,998 | 0,000017 – 0,021 |
+| účetní, 6 dok. / 27 chunků (09-18) | 0,0014 – 0,9993 | 0,0012 – 0,4995 |
+
+**Čistá mezera zmizela.** Na osobním korpusu mezi 0,021 a 0,332 neleželo nic,
+takže na volbě prahu skoro nezáleželo; na účetním se pásma překrývají po celé
+délce a nejhorší zodpověditelný dotaz leží POD nejlepším nezodpověditelným.
+
+Pro variantu B je to přímý důkaz, že první návrh ze seznamu výše („práh na
+rerank skóre citace") na ni **nestačí a stačit nemůže**: dotaz U017 („v jaké
+měně je faktura 2026-041") má skóre **0,4995** — chunk JE ta správná faktura,
+jen v ní měna není a model napsal „v české koruně [1]". Aby ho práh utnul,
+musel by ležet nad 0,5, a tam padne 16 ze 42 platných dotazů. Varianta B je
+tím pádem odkázaná na návrh 1 (ověřovací druhé volání) nebo 3 (nechat být).
+
+Mimochodem to potvrzuje i diagnózu z 08-18, že skóre měří relevanci CHUNKU
+k DOTAZU, ne přítomnost faktu — jen teď je to podložené číslem, ne úvahou.
+
+Zavedeno zároveň: **dvoustupňové odmítnutí** (`ANSWER_WEAK_RERANK=0,02`).
+Neřeší variantu B, řeší opačnou chybu, kterou totéž měření odhalilo — práh
+0,1 poslal 7 ze 42 zodpověditelných dotazů do „nic jsem nenašel", ačkoliv
+dokument v korpusu byl. V pásmu 0,02–0,1 se nově odpoví s výslovnou výhradou,
+pod 0,02 se mlčí dál. Podrobně `druhymozek_rag/PRED-D8.md`.
+
 Souvisí: P10 (Whisper halucinuje na vstupu — tatáž kategorie tichého
-selhání, jen na druhém konci pipeline).
+selhání, jen na druhém konci pipeline), P12 (přeměření na větším korpusu —
+tahle podmínka se tím splnila).
 
 ---
 

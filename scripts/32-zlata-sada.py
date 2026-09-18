@@ -105,9 +105,18 @@ for p in POLOZKY:
         # Citují se chunky, které prošly prahem — ne všechno, co vrátil
         # retrieval. Kontrola `zdroj` se musí ptát na to, co model
         # OPRAVDU viděl, jinak by prošla i odpověď složená ze šumu.
-        z["zdroje"] = sorted({h["source_path"] for h in res["results"]
-                              if h.get("rerank_score") is None
-                              or float(h["rerank_score"]) >= config.ANSWER_MIN_RERANK})
+        #
+        # VOLÁ SE PRODUKČNÍ FUNKCE, prah se tu nepočítá znovu. Do 2026-09-18
+        # tu stála kopie podmínky `rerank_score >= ANSWER_MIN_RERANK`, jenže
+        # `answer()` mezitím umí dvoustupňové odmítnutí: když nad hlavním
+        # prahem není nic, odpoví ze slabého pásma (0,02–0,1) s výhradou.
+        # Kopie o tom neví, takže by u takové odpovědi vypsala prázdné
+        # `zdroje` — tedy „model neviděl nic" k odpovědi, kterou model dal.
+        # Přesně ta třída tiché neshody mezi měřením a provozem, kvůli které
+        # se P8 hledala čtyři dny.
+        _videne, _slaba = core.podle_jistoty(res["results"])
+        z["slaba_opora"] = _slaba
+        z["zdroje"] = sorted({h["source_path"] for h in _videne})
         z["zdroje_vse"] = sorted({h["source_path"] for h in res["results"]})
     except Exception as e:
         z["chyba"] = repr(e)
