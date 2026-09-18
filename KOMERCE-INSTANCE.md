@@ -43,8 +43,15 @@
 
 | alias | smí volat | rozpočet | rpm |
 |---|---|---|---|
-| `kryton` | `reasoning`, `workhorse`, `cheap`, `cheap-fallback`, **`backstop`** | 20 USD / 30 d | 60 |
+| `kryton` | `reasoning`, `workhorse`, `cheap`, `cheap-fallback`, **`backstop`**, `verify` | 20 USD / 30 d | 60 |
 | `retrieval-service` | `cheap`, `cheap-fallback` | 5 USD / 30 d | 60 |
+
+`verify` přibyl 2026-09-18 (`POST /key/update`) kvůli ověřovacímu druhému
+volání (P4 varianta B). Míří na tentýž model jako `workhorse`, ale MUSÍ mít
+vlastní alias: alert A1 stojí na premise „klíč `kryton` nemá `workhorse`
+zavolat ani jednou" a ověřování přes `workhorse` by ji zrušilo — A1 by pípalo
+každý den. Zjištěno až při nasazení, kdy report po dvou zkušebních ověřeních
+alert skutečně vyhodil.
 
 Hodnoty vrácené z `POST /key/generate` jsou v podman secretech
 `litellm_kryton_key` / `litellm_retrieval_key`; z LiteLLM se zpět

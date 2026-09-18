@@ -146,10 +146,18 @@ ANSWER_WEAK_RERANK = float(os.environ.get("ANSWER_WEAK_RERANK", "0.02"))
 # mít falešně pozitivní nálezy a označit správnou odpověď za fabrikaci.
 ANSWER_VERIFY = os.environ.get("ANSWER_VERIFY", "0") not in ("0", "false", "no")
 
-# `workhorse` (gemma-4-26b) a ne `reasoning`: úloha je rozhodovací, ne
-# tvůrčí, a workhorse je na českých úlohách změřený (medián 3,6 s). Cenu to
-# drží dole — kontrola běží u KAŽDÉ odpovědi, tedy stejně často jako `answer`.
-ANSWER_VERIFY_MODEL = os.environ.get("ANSWER_VERIFY_MODEL", "workhorse")
+# Alias `verify` míří na TENTÝŽ model jako `workhorse` (gemma-4-26b): úloha je
+# rozhodovací, ne tvůrčí, a gemma je na českých úlohách změřená (medián 3,6 s).
+# Cenu to drží dole — kontrola běží u KAŽDÉ odpovědi, tedy stejně často
+# jako `answer`.
+#
+# PROČ VLASTNÍ ALIAS A NE PŘÍMO `workhorse`. Alert A1 v `31-denni-report.py`
+# stojí na premise „klíč `kryton` nemá `workhorse` zavolat ani jednou, a když
+# zavolal, je to tichý propad z `reasoning` (P8)". Ověřování přes `workhorse`
+# by tu premisu zrušilo a A1 by pípalo každý den — alert, co pípá pořád, se
+# za týden přestane číst. Zjištěno při nasazení 2026-09-18: report po dvou
+# zkušebních ověřeních alert skutečně vyhodil.
+ANSWER_VERIFY_MODEL = os.environ.get("ANSWER_VERIFY_MODEL", "verify")
 
 # Krátký strop: očekává se „OK", nebo „CHYBA" plus jedna věta. Když model
 # začne psát esej, je to samo o sobě signál, že instrukci nepochopil.

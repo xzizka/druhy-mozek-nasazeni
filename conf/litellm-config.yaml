@@ -176,6 +176,32 @@ model_list:
       num_retries: 3
 
   # -------------------------------------------------------------------
+  # Ověřovací druhé volání (P4 varianta B, `core.over_odpoved()`): ptá se,
+  # jestli tvrzení hotové odpovědi doslova vyplývají z podkladů.
+  #
+  # TENTÝŽ MODEL JAKO `workhorse`, a přesto VLASTNÍ ALIAS. Není to kosmetika:
+  # alert A1 v `31-denni-report.py` stojí na premise „klíč `kryton` nemá alias
+  # `workhorse` zavolat ani jednou, a když zavolal, je to tichý propad z
+  # `reasoning` (P8)". Kdyby ověřování jelo přes `workhorse`, byla by ta
+  # premisa nepravdivá a A1 by pípalo KAŽDÝ DEN — tedy přesně ta past, před
+  # kterou varuje poznámka u PAMET_VYJIMKY: alert, co pípá pořád, se za týden
+  # přestane číst. Samostatný alias premisu zachovává.
+  #
+  # Vedlejší užitek: ve spend logu je vidět, co ta pojistka stojí, odděleně
+  # od generování odpovědí.
+  #
+  # Kratší timeout než workhorse (90 s): tohle je přílepek k už hotové
+  # odpovědi a uživatel na něj čeká navíc. Radši neověřeno než dvojnásobná
+  # latence — `over_odpoved()` selhává otevřeně a vrátí None.
+  # -------------------------------------------------------------------
+  - model_name: verify
+    litellm_params:
+      model: openrouter/google/gemma-4-26b-a4b-it
+      api_key: os.environ/OPENROUTER_API_KEY
+      timeout: 30
+      num_retries: 2
+
+  # -------------------------------------------------------------------
   # Levný model na mechanické úlohy: tagování, titulky, přepis dotazu.
   # Sem míří většina volání z indexační pipeline, takže cena za token
   # rozhoduje víc než kvalita.
