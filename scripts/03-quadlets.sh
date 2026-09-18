@@ -534,12 +534,17 @@ Environment=RETRIEVAL_URL=http://retrieval:8080
 Environment=LITELLM_URL=http://litellm:4000
 Environment=MARKDOWN_ROOT=/data/markdown
 # Overovaci druhe volani (P4 varianta B). Hodnota z promenne nahore: osobni
-# brain 0, komerce 1. Alias `verify` MUSI byt v seznamu modelu klice (nize),
-# jinak kontrola skonci na 403 a `over_odpoved()` vrati None — tedy tise
-# neoveřeno misto ochrany.
+# brain 0, komerce 1. Alias "verify" MUSI byt v seznamu modelu klice (nize),
+# jinak kontrola skonci na 403 a over_odpoved() vrati None — tedy tise
+# neovereno misto ochrany.
+#
+# ZADNE ZPETNE APOSTROFY V TOMHLE HEREDOCU. Je neuvozeny (<<EOF), takze je
+# shell provede jako prikaz a slovo z komentare zmizi. Tenhle soubor na to
+# uz najel trikrat (viz commit "zpetne apostrofy v kryton heredocu, potreti")
+# a 2026-09-19 pocvrte.
 Environment=ANSWER_VERIFY=${ANSWER_VERIFY}
 # LLM klic omezeny na reasoning/workhorse/cheap/cheap-fallback/backstop
-# a `verify`, rozpocet 20 USD / 30 dni.
+# a "verify", rozpocet 20 USD / 30 dni.
 #
 # POZOR, TENHLE SEZNAM MUSI OBSAHOVAT CELY FALLBACK RETEZ. Zjisteno
 # 2026-09-09: klic mel jen reasoning/workhorse/cheap/cheap-fallback, takze
