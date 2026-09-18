@@ -114,10 +114,19 @@ ANSWER_MIN_RERANK = float(os.environ.get("ANSWER_MIN_RERANK", "0.1"))
 # 0,0080, tedy nerozeznatelné od šumu. Hodnota 0 mechanismus vypne a chování
 # se vrátí k jedinému prahu.
 #
-# NEŘEŠÍ P4 VARIANTU B, a to je potřeba říct nahlas. Dotaz U017 („v jaké měně
-# je faktura 2026-041") má skóre 0,4995 — chunk JE ta správná faktura, jen
-# v ní měna není a model si ji vymyslel. Takový případ neutne žádný práh;
-# na to je potřeba kontrola tvrzení proti citovanému úryvku, ne prahování.
+# NEŘEŠÍ P4 VARIANTU B, a to je potřeba říct nahlas. Doloženo dotazem U029
+# („jak vypadalo zastupování před 15. lednem 2026"): dotaz je zodpověditelný,
+# retrieval našel správný chunk se skóre 0,1235 NAD prahem, a model přesto
+# k doslovné citaci stanov přidal větu „zastupování vyžadovalo souběžný
+# podpis", která v podkladu není. Prahování se dívá na vztah chunku k dotazu,
+# ne na to, co odpověď navíc tvrdí — takový případ neutne žádná jeho hodnota.
+# Na to je potřeba kontrola tvrzení proti úryvku (`ANSWER_VERIFY` níž).
+#
+# OPRAVA 2026-09-19: do té doby tu jako příklad stál dotaz U017 („v jaké měně
+# je faktura") se skóre 0,4995. Ukázalo se, že ta eval položka byla špatně
+# označená — fixture `fak-2026-041.md` měnu (Kč) obsahuje, takže odpověď byla
+# doložená, ne vymyšlená. Po opravě katalogu nezůstal NAD prahem ani jeden
+# nezodpověditelný dotaz. Závěr to nemění, jen posouvá důkaz na U029.
 ANSWER_WEAK_RERANK = float(os.environ.get("ANSWER_WEAK_RERANK", "0.02"))
 
 # ---------------------------------------------------------------------------
@@ -125,10 +134,13 @@ ANSWER_WEAK_RERANK = float(os.environ.get("ANSWER_WEAK_RERANK", "0.02"))
 # zvolený 2026-09-18 poté, co měření vyloučilo prahování.
 # ---------------------------------------------------------------------------
 # CO TO ŘEŠÍ. Práh zahazuje nerelevantní chunky, ale fabrikaci NAD relevantním
-# chunkem nechytí: U017 („v jaké měně je faktura 2026-041") má rerank 0,4995,
-# protože chunk JE ta správná faktura — jen v ní měna není a model napsal
-# „v české koruně [1]". Odpověď se proto po vygenerování pošle podruhé,
-# s úryvky, a ptá se: vyplývá každé tvrzení doslova z nich?
+# chunkem nechytí. Doloženo U029: dotaz na zastupování před 15. 1. 2026 je
+# zodpověditelný, chunk se našel (0,1235 nad prahem), model ocitoval stanovy
+# doslova — a pak přidal větu „zastupování vyžadovalo souběžný podpis", která
+# v podkladu není a odporuje čl. 7 (podepisuje jednatel, jednotné číslo).
+# Eval sada tu odpověď UZNALA, protože obsahuje citaci i obě požadovaná fakta.
+# Odpověď se proto po vygenerování pošle podruhé, s úryvky, a ptá se:
+# vyplývá každé tvrzení doslova z nich?
 #
 # TŘI STAVY, NE DVA. Ověření může vyjít OK, CHYBA, nebo NEPROBĚHNOUT (429,
 # timeout, nerozluštitelná odpověď). „Neověřeno" se NESMÍ tvářit jako
@@ -140,10 +152,18 @@ ANSWER_WEAK_RERANK = float(os.environ.get("ANSWER_WEAK_RERANK", "0.02"))
 # kontrolora by z pojistky udělalo nový SPOF (P6). Do logu ale jde WARNING,
 # protože tichá degradace je P8.
 #
-# VÝCHOZÍ VYPNUTO. Osobní provoz se podle plánu nesahá a tohle je změna
-# chování i ceny; na komerci se zapíná přes prostředí (ANSWER_VERIFY=1).
-# Než se zapne natrvalo, patří změřit na účetní sadě — sama kontrola může
-# mít falešně pozitivní nálezy a označit správnou odpověď za fabrikaci.
+# VÝCHOZÍ VYPNUTO, protože osobní provoz se podle plánu komercializace nesahá
+# a tohle je změna chování i ceny. Na komerci se zapíná přes prostředí.
+#
+# ZMĚŘENO 2026-09-19 na účetní sadě (`druhymozek_rag/uat/overeni-vysledky.md`):
+# kontrola proběhla u 41 ze 48 dotazů (zbylých 7 se odmítlo pod prahem, takže
+# nebylo co ověřovat), vytkla 2 odpovědi a OBĚ oprávněně — falešně pozitivní
+# nula. Cena: +968 ms mediánu a $0,00007 na dotaz. Jednu z těch dvou (U029)
+# eval sada propustila, takže kontrola chytila víc než sada.
+#
+# Vzorek je ale malý a syntetický (27 chunků) a kontrola není deterministická:
+# hraniční U017 dostala v jednom běhu CHYBA a v druhém OK. Po nahrání
+# skutečných účetních dokumentů přeměřit.
 ANSWER_VERIFY = os.environ.get("ANSWER_VERIFY", "0") not in ("0", "false", "no")
 
 # Alias `verify` míří na TENTÝŽ model jako `workhorse` (gemma-4-26b): úloha je

@@ -497,15 +497,38 @@ vyvrací předpoklad, na kterém práh stál:
 takže na volbě prahu skoro nezáleželo; na účetním se pásma překrývají po celé
 délce a nejhorší zodpověditelný dotaz leží POD nejlepším nezodpověditelným.
 
-Pro variantu B je to přímý důkaz, že první návrh ze seznamu výše („práh na
-rerank skóre citace") na ni **nestačí a stačit nemůže**: dotaz U017 („v jaké
-měně je faktura 2026-041") má skóre **0,4995** — chunk JE ta správná faktura,
-jen v ní měna není a model napsal „v české koruně [1]". Aby ho práh utnul,
-musel by ležet nad 0,5, a tam padne 16 ze 42 platných dotazů. Varianta B je
-tím pádem odkázaná na návrh 1 (ověřovací druhé volání) nebo 3 (nechat být).
-
 Mimochodem to potvrzuje i diagnózu z 08-18, že skóre měří relevanci CHUNKU
 k DOTAZU, ne přítomnost faktu — jen teď je to podložené číslem, ne úvahou.
+
+> **OPRAVA 2026-09-19.** Tady původně stálo, že přímým důkazem neúčinnosti
+> prahu je dotaz U017 („v jaké měně je faktura 2026-041") se skóre 0,4995.
+> To bylo špatně: eval položka byla mylně označená jako neodpověditelná,
+> ačkoliv fixture `fak-2026-041.md` měnu (`1 490 Kč/h`, `216 348 Kč`)
+> obsahuje. Model odpověděl doloženě, ne vymyšleně, a D6 to přesto zapsal
+> jako zachycenou halucinaci. Po opravě katalogu nezůstal nad prahem ani
+> jeden neodpověditelný dotaz. Závěr o prahu se tím nemění — držel ho
+> překryv pásem, ne U017 — ale důkaz pro variantu B se přesouvá na U029
+> níž. Podrobně `druhymozek_rag/uat/overeni-vysledky.md`.
+
+### Varianta B doložená na účetních datech: U029 (2026-09-19)
+
+Dotaz „Jak vypadalo zastupování před 15. lednem 2026?" je **zodpověditelný**,
+retrieval našel správný chunk (rerank 0,1235, nad prahem) a **eval sada
+odpověď uznala** — má citaci i obě požadovaná fakta. Model napsal:
+
+> „…jednatel a jednatelka, kteří museli jednat **společně vždy oba**.
+> Zastupování společnosti tedy **vyžadovalo souběžný podpis** a jednání obou
+> těchto osob. [1]"
+
+První věta je doslova ze stanov (čl. 6). Druhá nikde není: o podpisech mluví
+čl. 7 a říká, že podepisuje *jednatel*, jednotné číslo. „Jednají společně"
+a „vyžaduje souběžný podpis" jsou právně různá tvrzení.
+
+To je **mechanismus 2** z rozboru výš — přečtení úryvku nad jeho výpověď —
+a je to lepší důkaz než U017 kdy byl: žádný práh na retrievalu tohle chytit
+nemůže, protože chyba není ve výběru chunku, ale v tom, co odpověď navíc
+tvrdí. Zachytilo to jedině ověřovací druhé volání. Varianta B je tím pádem
+odkázaná na návrh 1, nebo 3 (nechat být).
 
 Zavedeno zároveň: **dvoustupňové odmítnutí** (`ANSWER_WEAK_RERANK=0,02`).
 Neřeší variantu B, řeší opačnou chybu, kterou totéž měření odhalilo — práh
@@ -543,10 +566,25 @@ Varování se k odpovědi **připojuje**, odpověď se nemaže: kontrola sama m�
 mít falešně pozitivní nález a schovat správnou odpověď by uživateli vzalo
 možnost posoudit ji podle citací.
 
-**VÝCHOZÍ VYPNUTO** (`ANSWER_VERIFY=0`). Osobní provoz se podle plánu
-komercializace nesahá, a než se zapne natrvalo, patří změřit na účetní sadě
-falešně pozitivní nálezy — dnes je ověřená jen mechanika (15 asercí), ne
-kvalita verdiktů. To je první úkol po nasazení na komerci.
+**VÝCHOZÍ VYPNUTO** (`ANSWER_VERIFY=0`), protože osobní provoz se podle plánu
+komercializace nesahá.
+
+**Změřeno 2026-09-19** na účetní sadě, 48 dotazů na komerci
+(`druhymozek_rag/uat/overeni-vysledky.md`):
+
+| | |
+|---|---|
+| kontrola proběhla | 41 ze 48 (7 odmítnuto pod prahem → nebylo co ověřovat) |
+| vytknuto | 2 — U027 (spočítaný průměr) a U029 (souběžný podpis) |
+| falešně pozitivní | **0**, obě výtky po ručním posouzení věcné |
+| latence navíc | medián 968 ms, max 3,7 s |
+| spend | 43 volání = $0,003, tedy ≈ zdvojnásobení na odpověď |
+| úspěšnost sady | 40/48 proti 38/48 v D6 (obojí s opraveným U017) |
+
+Kontrola tedy chytila i to, co eval sada propustila (U029). Vzorek je ale
+malý a syntetický a verdikty nejsou deterministické — hraniční U017 vyšla
+v jednom běhu CHYBA, v druhém OK. Po nahrání skutečných účetních dokumentů
+přeměřit.
 
 Souvisí: P10 (Whisper halucinuje na vstupu — tatáž kategorie tichého
 selhání, jen na druhém konci pipeline), P12 (přeměření na větším korpusu —
