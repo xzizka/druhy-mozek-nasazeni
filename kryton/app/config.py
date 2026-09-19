@@ -322,6 +322,17 @@ BACKUP_S3_PREFIX = os.environ.get("BACKUP_S3_PREFIX", "db-backups/")
 # web UI: sdílený token v Authorization hlavičce, viz mcp_server.py.
 # ---------------------------------------------------------------------------
 MCP_BEARER_TOKEN = os.environ.get("MCP_BEARER_TOKEN", "")
+
+# ---------------------------------------------------------------------------
+# REST API (/api/dotaz) — core.search()+core.answer() pro serverove klienty,
+# ktere neumi MCP protokol. Vlastni token, ne sdileny s MCP_BEARER_TOKEN:
+# klient bezi na cizim hostingu (PHP na sdilenem webhostingu) a musi jit
+# odvolat, aniz to shodi lokalni agenty.
+# ---------------------------------------------------------------------------
+# .strip() zamerne: secret vyrobeny `openssl rand | podman secret create -`
+# nese na konci newline a porovnani by tise selhalo na 401. Token nikdy
+# nema mit okolni bily znak, takze orez je bezpecny.
+API_BEARER_TOKEN = os.environ.get("API_BEARER_TOKEN", "").strip()
 BACKUP_RETENTION_DAYS = int(os.environ.get("BACKUP_RETENTION_DAYS", "30"))
 
 # Telegram můstek (krok 1: jen text — core.capture / core.search+core.answer).

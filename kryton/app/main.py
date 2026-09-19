@@ -5,13 +5,16 @@ vejde se do MemoryMax=800M a je to jeden stack s retrievalem.
 """
 from __future__ import annotations
 
+import hmac
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import Cookie, FastAPI, File, Form, UploadFile
+from fastapi import (Cookie, FastAPI, File, Form, Header,
+                     HTTPException, UploadFile)
 from fastapi.responses import HTMLResponse, RedirectResponse
 from jinja2 import Environment
 from markupsafe import Markup
+from pydantic import BaseModel
 
 from . import analytics, config, core, db, ingest, mcp_server, storage, telegram
 
@@ -307,6 +310,54 @@ def ask(query: str = Form(...), conversation_id: str = Form(None),
         log.exception("dotaz selhal")
         db.add_message(cid, "assistant", f"Dotaz selhal: {e}")
     return RedirectResponse(f"/konverzace/{cid}", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# REST API pro serverove klienty (/api/dotaz)
+#
+# Proc vedle /mcp: MCP je JSON-RPC se session managementem a dynamickou
+# registraci klienta. Z PHP na sdilenem webhostingu, kde nejde drzet
+# spojeni, je nepouzitelny. Tenhle endpoint dela totez co nastroj `hledat`
+# v mcp_server.py, jen jako jeden POST s JSON telem.
+#
+# Proc ne /dotaz: ten patri webovemu UI — overuje cookie session, zapisuje
+# do konverzacniho vlakna a vraci 303 na HTML stranku. Stroj by musel
+# parsovat HTML.
+# ---------------------------------------------------------------------------
+class ApiDotaz(BaseModel):
+    dotaz: str
+
+
+def _api_token_ok(authorization: str | None) -> bool:
+    """Bez nastaveneho tokenu je endpoint zavreny pro kazdeho, ne otevreny.
+
+    Stejna uvaha jako u `_SdilenyToken.verify_token` v mcp_server.py —
+    chybejici secret nesmi znamenat volny pruchod.
+    """
+    if not config.API_BEARER_TOKEN:
+        return False
+    if not authorization or not authorization.startswith("Bearer "):
+        return False
+    return hmac.compare_digest(authorization[7:], config.API_BEARER_TOKEN)
+
+
+@app.post("/api/dotaz")
+def api_ask(telo: ApiDotaz, authorization: str = Header(None)):
+    if not _api_token_ok(authorization):
+        raise HTTPException(status_code=401, detail="invalid_token",
+                            headers={"WWW-Authenticate": "Bearer"})
+    q = telo.dotaz.strip()
+    if not q:
+        raise HTTPException(status_code=422, detail="prazdny dotaz")
+    vysledky = core.search(q)
+    hits = vysledky["results"]
+    odp = core.answer(q, hits)
+    # Kanal "api" ma vlastni konverzacni vlakno na den (db.konverzace_kanalu),
+    # takze provoz z webu se v historii nemicha s provozem z hostingu.
+    core.zaznamenej("api", q, odp, hits)
+    citace = [{"source_path": h["source_path"],
+               "heading_path": h.get("heading_path")} for h in hits]
+    return {"odpoved": odp.text, "citace": citace, "model": odp.model}
 
 
 @app.post("/hodnoceni")
