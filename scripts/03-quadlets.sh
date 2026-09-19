@@ -78,6 +78,27 @@ fi
 # bez Telegramu normalne spusti. Komerci instance (ucetni) zadny osobni
 # bot nema.
 # ---------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# REST API (/api/dotaz): core.search+core.answer pro serverove klienty,
+# ktere neumi MCP protokol (napr. PHP na sdilenem webhostingu). Vlastni
+# token, ne sdileny s MCP - klient bezi na cizim hostingu a musi jit
+# odvolat, aniz to shodi lokalni agenty.
+#
+# Rizeno EXISTENCI SECRETU, ne promennou: komerce ho ma, osobni brain ne,
+# a zadny prepinac tim padem netreba. Tataz past jako u Keepu a Telegramu -
+# `Secret=` na neexistujici podman secret znamena, ze unit VUBEC
+# NENASTARTUJE, ne ze by chybela jedna promenna.
+#
+# PROC TO TU JE (2026-09-19): radek byl dopsany rucne primo do
+# /etc/containers/systemd/kryton.container, takze ho prvni regenerace
+# quadletu smazala a REST API by po nejblizsim restartu tise ztratilo
+# token. Zjisteno tim, ze se to stalo.
+# ---------------------------------------------------------------------
+API_LINES=""
+if podman secret inspect kryton_api_token >/dev/null 2>&1; then
+    API_LINES="Secret=kryton_api_token,type=env,target=API_BEARER_TOKEN"
+fi
+
 TELEGRAM_ALLOWED_USER_ID="${TELEGRAM_ALLOWED_USER_ID:-819345451}"
 TELEGRAM_LINES=""
 if podman secret inspect telegram_bot_token >/dev/null 2>&1; then
@@ -624,6 +645,10 @@ Secret=openrouter_api_key,type=env,target=STT_API_KEY
 # agenty (napr. OpenWork). Jina autentizace nez web UI, viz app/mcp_server.py.
 # Bez tohohle secretu endpoint existuje, ale odmitne uplne kazdy pozadavek.
 Secret=mcp_bearer_token,type=env,target=MCP_BEARER_TOKEN
+# REST API (/api/dotaz) pro serverove klienty, ktere neumi MCP. API_LINES je
+# prazdny, kdyz secret kryton_api_token neexistuje (osobni brain) - endpoint
+# pak odmitne kazdy pozadavek, Kryton se normalne spusti.
+${API_LINES}
 # Google Keep (P13), viz app/keep.py a scripts/29-keep-setup.sh. Jednosmerne,
 # jen cteni - do Keepu se nezapisuje nic. Prazdny KEEP_EMAIL nebo chybejici
 # secret = sync vypnuty, Kryton bezi dal.
