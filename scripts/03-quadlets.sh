@@ -47,10 +47,12 @@ ANSWER_VERIFY="${ANSWER_VERIFY:-0}"
 # Komerce se proto generuje s konkretni znackou (KRYTON_TAG=2026-09-19),
 # takze "latest" muze pri vyvoji volne cestovat a do produkce nedosahne.
 # Po kazdem nasazeni: postav image, otaguj datem, regeneruj s tim datem.
-#
-# retrieval-service:latest ma tentyz tvar a zatim se nerozesel; az bude
-# potreba, patri sem stejny parametr.
 KRYTON_TAG="${KRYTON_TAG:-latest}"
+# Totez pro retrieval-service. Nerozesel se — staví do nej jen nasazeni,
+# zadna soubezna vetev — ale je to tataz konstrukce a spolehat na to, ze
+# se do nej nikdy nikdo netrefi druhym buildem, je presne ten predpoklad,
+# ktery u Krytona neplatil.
+RETRIEVAL_TAG="${RETRIEVAL_TAG:-latest}"
 QD=/etc/containers/systemd
 install -d -m 0755 "$QD"
 
@@ -73,12 +75,6 @@ else
 fi
 
 # ---------------------------------------------------------------------
-# Telegram je OSOBNI kanal (denni otazka, prepis hlasovek). Kdyz secret
-# telegram_bot_token neexistuje, quadlet cely blok vynecha - Kryton se
-# bez Telegramu normalne spusti. Komerci instance (ucetni) zadny osobni
-# bot nema.
-# ---------------------------------------------------------------------
-# ---------------------------------------------------------------------
 # REST API (/api/dotaz): core.search+core.answer pro serverove klienty,
 # ktere neumi MCP protokol (napr. PHP na sdilenem webhostingu). Vlastni
 # token, ne sdileny s MCP - klient bezi na cizim hostingu a musi jit
@@ -99,6 +95,12 @@ if podman secret inspect kryton_api_token >/dev/null 2>&1; then
     API_LINES="Secret=kryton_api_token,type=env,target=API_BEARER_TOKEN"
 fi
 
+# ---------------------------------------------------------------------
+# Telegram je OSOBNI kanal (denni otazka, prepis hlasovek). Kdyz secret
+# telegram_bot_token neexistuje, quadlet cely blok vynecha - Kryton se
+# bez Telegramu normalne spusti. Komerci instance (ucetni) zadny osobni
+# bot nema.
+# ---------------------------------------------------------------------
 TELEGRAM_ALLOWED_USER_ID="${TELEGRAM_ALLOWED_USER_ID:-819345451}"
 TELEGRAM_LINES=""
 if podman secret inspect telegram_bot_token >/dev/null 2>&1; then
@@ -464,7 +466,7 @@ ContainerName=retrieval
 # to spravne a port zacne odmitat spojeni, i kdyz sluzba bezi. Pevna IP
 # tenhle rezim odstrani: duplicitni pravidlo miri na stejnou adresu.
 IP=10.89.7.13
-Image=localhost/retrieval-service:latest
+Image=localhost/retrieval-service:${RETRIEVAL_TAG}
 Network=brain.network
 Volume=${APP_ROOT}/markdown:/data/markdown:ro,Z
 # ZMENA: puvodne
