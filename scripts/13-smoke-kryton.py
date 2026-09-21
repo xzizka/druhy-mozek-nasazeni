@@ -1292,6 +1292,52 @@ print("== odhlášení ==")
 r = c.get("/odhlasit", follow_redirects=False)
 check("GET /odhlasit", r.status_code == 303)
 
+print("== REST API (/api/dotaz) ==")
+
+# Token se nastavuje primo do configu, stejne jako u MCP nize.
+_puv_api_token = main.config.API_BEARER_TOKEN
+main.config.API_BEARER_TOKEN = "smoke-api-token"
+_AUTH = {"Authorization": "Bearer smoke-api-token"}
+try:
+    _r = c.post("/api/dotaz", json={"dotaz": "test"})
+    check("bez tokenu 401", _r.status_code == 401, str(_r.status_code))
+    _r = c.post("/api/dotaz", json={"dotaz": "test"},
+                headers={"Authorization": "Bearer spatny"})
+    check("spatny token 401", _r.status_code == 401, str(_r.status_code))
+    _r = c.post("/api/dotaz", json={"dotaz": "   "}, headers=_AUTH)
+    check("prazdny dotaz 422", _r.status_code == 422, str(_r.status_code))
+
+    _r = c.post("/api/dotaz", json={"dotaz": "test"}, headers=_AUTH)
+    _j = _r.json()
+    check("se spravnym tokenem 200", _r.status_code == 200, str(_r.status_code))
+    check("kontrakt drzi klice odpoved/citace/model",
+          all(k in _j for k in ("odpoved", "citace", "model")), str(_j.keys()))
+    check("citace nese rerank_score, aby klient mel podle ceho soudit",
+          _j["citace"] and _j["citace"][0]["rerank_score"] == 0.987, str(_j["citace"]))
+    check("stopa je v odpovedi strukturovane, ne jen vetou v textu",
+          set(_j["stopa"]) == {"overeno", "slaba_opora", "odmitnuto", "max_rerank"},
+          str(_j.get("stopa")))
+
+    # JADRO OPRAVY (2026-09-21): drive se citace skladaly ze VSECH hits, takze
+    # u odmitnute odpovedi prisel klientovi plny vycet zdroju, ktere model
+    # nikdy nevidel. Podprahovy chunk se ted citovat nesmi.
+    _puv_search = core.search
+    core.search = lambda q, limit=None, rewrite=None, **kw: {
+        "results": [dict(HIT, rerank_score=0.00007)]}
+    try:
+        _j = c.post("/api/dotaz", json={"dotaz": "test"}, headers=_AUTH).json()
+        check("podprahovy chunk se NEcituje (drive se vracel)",
+              _j["citace"] == [], str(_j["citace"]))
+    finally:
+        core.search = _puv_search
+
+    main.config.API_BEARER_TOKEN = ""
+    _r = c.post("/api/dotaz", json={"dotaz": "test"}, headers=_AUTH)
+    check("bez nastaveneho tokenu je endpoint zavreny, ne otevreny",
+          _r.status_code == 401, str(_r.status_code))
+finally:
+    main.config.API_BEARER_TOKEN = _puv_api_token
+
 print("== MCP server (/mcp) ==")
 import asyncio as _asyncio
 import threading as _threading

@@ -355,9 +355,38 @@ def api_ask(telo: ApiDotaz, authorization: str = Header(None)):
     # Kanal "api" ma vlastni konverzacni vlakno na den (db.konverzace_kanalu),
     # takze provoz z webu se v historii nemicha s provozem z hostingu.
     core.zaznamenej("api", q, odp, hits)
+    # CITUJI SE JEN CHUNKY, KTERE MODEL OPRAVDU VIDEL, ne vsechno, co vratil
+    # retrieval. Do 2026-09-21 se seznam skladal ze vsech `hits`, takze
+    # u odpovedi "v poznamkach jsem nic nenasel" prisel klientovi plny vycet
+    # zdroju — a u odpovedi ze slabeho pasma i chunky, ktere prah zahodil.
+    #
+    # Je to tentyz vedlejsi nalez, ktery POZADAVKY popisuji u P4 pro webove
+    # UI ("citace se neberou z textu odpovedi, takze fabrikovana odpoved je
+    # od pravdive nerozeznatelna"). Na strojovem rozhrani je to horsi: web
+    # aspon vypisuje rerank skore vedle kazde citace a clovek si to prebere,
+    # kdezto klient dostaval holy seznam cest bez jakehokoli signalu.
+    #
+    # `podle_jistoty()` je tataz funkce, kterou uvnitr vola `answer()`, a je
+    # ciste — druhe zavolani da tyz vysledek. Prazdny seznam je spravna
+    # odpoved: bud se nic nenaslo, nebo odpoved stoji na overenych cislech
+    # z `extra`, ne na chuncich.
+    videne, _ = core.podle_jistoty(hits)
     citace = [{"source_path": h["source_path"],
-               "heading_path": h.get("heading_path")} for h in hits]
-    return {"odpoved": odp.text, "citace": citace, "model": odp.model}
+               "heading_path": h.get("heading_path"),
+               "rerank_score": h.get("rerank_score")} for h in videne]
+    # STOPA STRUKTUROVANE, ne jen jako veta v textu. Pri zapnutem
+    # ANSWER_VERIFY se varovani o neprosle kontrole pripoji do `odpoved`,
+    # jenze stroj cte pole, ne text — bez techhle priznaku nema PHP klient
+    # jak poznat, ze odpoved nema verit. Vybrana podmnozina, ne cela stopa:
+    # tohle je verejny kontrakt a vnitrni diagnostika se smi menit.
+    #
+    # `overeno` je TROJSTAVOVE (true/false/null); null znamena "kontrola
+    # neprobehla", ne "proslo". Klient to nesmi slit dohromady.
+    return {"odpoved": odp.text, "citace": citace, "model": odp.model,
+            "stopa": {"overeno": odp.stopa.get("overeno"),
+                      "slaba_opora": odp.stopa.get("slaba_opora"),
+                      "odmitnuto": odp.stopa.get("odmitnuto"),
+                      "max_rerank": odp.stopa.get("max_rerank")}}
 
 
 @app.post("/hodnoceni")
