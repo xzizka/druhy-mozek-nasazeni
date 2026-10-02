@@ -306,6 +306,32 @@ def konkretni_den(query: str) -> date | None:
     return d
 
 
+# Odkaz zpátky na den, o kterém už v konverzaci padla řeč. Jen s takovým
+# odkazem se datum přebírá — jinak by se po změně tématu táhlo dál.
+_ODKAZ_NA_DEN = ("toho dne", "ten den", "tom dni", "tomto dni", "tento den",
+                 "toho sameho dne", "ten samy den", "toho stejneho dne",
+                 "ten stejny den", "tehdy", "ten zapis", "ten zaznam")
+
+
+def den_z_historie(query: str, prior: list[dict] | None) -> date | None:
+    """Den, na který doplňující dotaz odkazuje („záznam z toho dne").
+
+    Hledání i `obdobi_z_dotazu()` vidí jen aktuální otázku, takže „z toho
+    dne" pro ně nemá obsah (2026-10-02, konverzace ea66f62e). Datum se bere
+    z nejnovější předchozí zprávy, která nějaké nese — typicky z odpovědi
+    „řešil jsi to 25. září 2026". Vlastní datum v dotazu má přednost.
+    """
+    if not prior or konkretni_den(query) is not None:
+        return None
+    if not any(w in _ascii(query) for w in _ODKAZ_NA_DEN):
+        return None
+    for m in reversed(prior):
+        d = konkretni_den(m.get("content") or "")
+        if d is not None:
+            return d
+    return None
+
+
 def obdobi_z_dotazu(query: str) -> tuple[date, date]:
     """Rozsah datumů, o který dotaz žádá. Default `DENIK_DEFAULT_DNI` dnů.
 
@@ -759,6 +785,8 @@ def answer(query: str, hits: list[dict], prior: list[dict] | None = None,
         do = date.today()
         dni = max(1, min(denik_dni, config.DENIK_MAX_DNI))
         obdobi = (do - timedelta(days=dni - 1), do)
+    elif (den := den_z_historie(query, prior)) is not None:
+        obdobi = (den, den)
     elif je_denikovy_prehled(query):
         obdobi = obdobi_z_dotazu(query)
 

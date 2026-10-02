@@ -1046,6 +1046,14 @@ for _q in ["Co je nového ve verzi 3.9 pythonu?", "Schůzka v 18.07 u Petra",
            "Co bylo 31. 2.?"]:
     check("NENÍ konkrétní den: %s" % _q[:32], core.konkretni_den(_q) is None)
 
+_hist = [{"role": "user", "content": "Co bylo 3. 9. 2026?"},
+         {"role": "assistant", "content": "Řešil jsi to 25. září 2026 [1]."}]
+check("den_z_historie vezme NEJNOVĚJŠÍ datum v historii",
+      core.den_z_historie("Jaký je záznam z toho dne?", _hist) == date(2026, 9, 25))
+check("vlastní datum v dotazu má přednost před historií",
+      core.den_z_historie("A co 1. 9. 2026, tehdy?", _hist) is None)
+check("bez historie nic", core.den_z_historie("záznam z toho dne", []) is None)
+
 _dnes = date.today()
 _blok = core.denik_kontext(_dnes, _dnes)
 check("denik_kontext načte dnešní zápis z DISKU (ne z indexu)",
@@ -1110,6 +1118,20 @@ try:
     _o = _PUVODNI_ANSWER("Co mě zaměstnávalo?", [dict(_SUM)], denik_dni=7)
     check("denik_dni=7 deník ZAPNE, i když v dotazu žádné deníkové slovo není",
           _o.stopa["denik_dni"] == 7, str(_o.stopa))
+
+    # Konverzace ea66f62e (2026-10-02): „z toho dne" bere datum z odpovědi.
+    _prior = [{"role": "user", "content": "Kdy jsem řešil nodeexportery?"},
+              {"role": "assistant", "content": "Řešil jsi je %d. %d. %d [1]."
+               % (_dnes.day, _dnes.month, _dnes.year)}]
+    _o = _PUVODNI_ANSWER("Jaký je kompletní záznam z toho dne?", [dict(_SUM)],
+                         prior=_prior)
+    check("„z toho dne“ převezme datum z předchozí odpovědi (jeden den)",
+          _o.stopa["denik_dni"] == 1
+          and "[%s]" % _dnes.isoformat() in _zachyceno["messages"][-1]["content"],
+          str(_o.stopa))
+    _o = _PUVODNI_ANSWER("Co dalšího jsem dělal?", [dict(_SUM)], prior=_prior)
+    check("bez odkazu zpátky se datum z historie NEPŘEBÍRÁ",
+          _o.stopa["denik_dni"] is None, str(_o.stopa))
     check("běžný dotaz drží ANSWER_MAX_TOKENS",
           _PUVODNI_ANSWER("Co je halfvec?", [dict(_SUM, rerank_score=0.9)])
           and _zachyceno["max_tokens"] == core.config.ANSWER_MAX_TOKENS,
