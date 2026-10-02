@@ -172,7 +172,10 @@ def kanal_facts() -> str:
 # do obou směrů.
 DENIK_SLOVA = (
     "denik", "denicek", "denikove", "zapisy", "zapisu", "zapisech",
-    "zaznamy", "zaznamu", "zaznamech",
+    # Kmen, ne vypsané tvary: „kompletní záznam z toho dne" (2026-10-02)
+    # neprošlo, protože seznam znal jen množné číslo. Podřetězec tu nevadí
+    # tak jako u měsíců níž — falešně pozitivní nález je levný (viz docstring).
+    "zaznam",
     "otazky dne", "otazku dne", "otazkach dne", "otazek dne",
     "kazdodenni", "kazdy den", "kazdeho dne",
     "sentiment", "nalad", "emoce", "emocn", "rozpolozeni",
@@ -196,8 +199,13 @@ def je_denikovy_prehled(query: str) -> bool:
     Obojí je levné. Táž úvaha jako u `je_agregacni()` výš. Kdo chce jistotu,
     použije explicitní cestu: rozbalovátko období na webu nebo `/denik [N]`
     v Telegramu — tam se nehádá nic.
+
+    Konkrétní den v dotazu („25. září", „25. 9.", „2026-09-25") stačí sám:
+    deníkové chunky nesou datum jen jako `2026-09-25`, takže retrieval na
+    „25. září" deník mezi kandidáty vůbec nedostane.
     """
-    return any(w in _ascii(query) for w in DENIK_SLOVA)
+    return (any(w in _ascii(query) for w in DENIK_SLOVA)
+            or konkretni_den(query) is not None)
 
 
 # Měsíce pro „za srpen". VYPSANÉ TVARY A `\b` NA OBOU STRANÁCH, ne kmeny
@@ -256,6 +264,47 @@ _BEZ_CISLA = (
 _CELY_DENIK = ("cely denik", "od zacatku", "vsechny zapisy", "vsechny zaznamy",
                "za vsechna leta", "kompletni denik")
 
+# Konkrétní den. Tečka za měsícem je u číselného tvaru POVINNÁ, jinak by
+# „verze 3.9" nebo čas „18.07" sedly jako datum.
+_DEN_ISO = re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b")
+_DEN_CISLEM = re.compile(r"\b(\d{1,2})\.\s*(\d{1,2})\.(?:\s*(\d{4})\b)?")
+_DEN_SLOVEM = re.compile(r"\b(\d{1,2})\.?\s*(%s)\b(?:\s*(\d{4})\b)?"
+                         % "|".join(v for _, v in _MESICE))
+
+
+def konkretni_den(query: str) -> date | None:
+    """Jeden určitý den z dotazu, nebo None. Bez roku se míní poslední
+    takový den, který už nastal — stejné pravidlo jako u „za srpen"."""
+    q = _ascii(query)
+    dnes = date.today()
+    m = _DEN_ISO.search(q)
+    if m:
+        rok, mesic, den = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        bez_roku = False
+    else:
+        m = _DEN_CISLEM.search(q)
+        if m:
+            den, mesic = int(m.group(1)), int(m.group(2))
+        else:
+            m = _DEN_SLOVEM.search(q)
+            if not m:
+                return None
+            den = int(m.group(1))
+            mesic = next(c for c, v in _MESICE
+                         if re.fullmatch(v, m.group(2)))
+        rok = int(m.group(3)) if m.group(3) else dnes.year
+        bez_roku = not m.group(3)
+    try:
+        d = date(rok, mesic, den)
+    except ValueError:
+        return None
+    if bez_roku and d > dnes:
+        try:
+            d = d.replace(year=d.year - 1)
+        except ValueError:
+            return None
+    return d
+
 
 def obdobi_z_dotazu(query: str) -> tuple[date, date]:
     """Rozsah datumů, o který dotaz žádá. Default `DENIK_DEFAULT_DNI` dnů.
@@ -272,6 +321,11 @@ def obdobi_z_dotazu(query: str) -> tuple[date, date]:
     """
     q = _ascii(query)
     dnes = date.today()
+
+    # Nejkonkrétnější vyhrává: „25. září" jinak spadlo na celé září.
+    den = konkretni_den(query)
+    if den is not None:
+        return den, den
 
     if any(w in q for w in _CELY_DENIK):
         return dnes - timedelta(days=config.DENIK_MAX_DNI - 1), dnes

@@ -1024,6 +1024,28 @@ _od, _do = core.obdobi_z_dotazu("jaký je sentiment mých zápisů?")
 check("bez určení období je default DENIK_DEFAULT_DNI",
       (_do - _od).days + 1 == core.config.DENIK_DEFAULT_DNI, "%s..%s" % (_od, _do))
 
+# Konkrétní den (2026-10-02): „kompletní záznam z 25. září 2026" spadlo na
+# celé září a heuristika ho vůbec nechytla, protože neznala „záznam".
+check("heuristika chytne „kompletní záznam z toho dne“",
+      core.je_denikovy_prehled("Jaký je kompletní záznam z toho dne?"))
+for _q, _ocek in [("Dej mi kompletní záznam z 25. září 2026.", date(2026, 9, 25)),
+                  ("Co jsem dělal 25. 9. 2026?", date(2026, 9, 25)),
+                  ("Co jsem dělal 25.9.2026", date(2026, 9, 25)),
+                  ("deník 2026-09-25", date(2026, 9, 25)),
+                  ("Co bylo 25 zari 2026", date(2026, 9, 25))]:
+    check("konkrétní den je jeden den: %s" % _q[:32],
+          core.obdobi_z_dotazu(_q) == (_ocek, _ocek), repr(core.obdobi_z_dotazu(_q)))
+    check("konkrétní den sám spustí deníkovou cestu: %s" % _q[:32],
+          core.je_denikovy_prehled(_q))
+_zitra = date.today() + timedelta(days=1)
+if (_zitra.month, _zitra.day) != (2, 29):
+    check("den bez roku v budoucnu se míní loni",
+          core.konkretni_den("co bylo %d. %d." % (_zitra.day, _zitra.month))
+          == _zitra.replace(year=_zitra.year - 1))
+for _q in ["Co je nového ve verzi 3.9 pythonu?", "Schůzka v 18.07 u Petra",
+           "Co bylo 31. 2.?"]:
+    check("NENÍ konkrétní den: %s" % _q[:32], core.konkretni_den(_q) is None)
+
 _dnes = date.today()
 _blok = core.denik_kontext(_dnes, _dnes)
 check("denik_kontext načte dnešní zápis z DISKU (ne z indexu)",
