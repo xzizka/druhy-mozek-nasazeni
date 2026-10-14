@@ -54,8 +54,102 @@ def check_password(given: str) -> bool:
 # Retrieval a LiteLLM
 # ---------------------------------------------------------------------------
 
+# Obraty, kterými uživatel otázku jen uvozuje: „kde mluvím o X", „dej mi
+# informaci o X", „co vím o X". Zjištěno 2026-10-14 na Kaggle: dotaz „Kaggle"
+# Keep poznámku našel, „Kde mluvím o Kaggle?" a „Dej mi informaci o Kaggle"
+# vrátily „nic jsem nenašel", ačkoliv TÁŽ poznámka ležela mezi kandidáty.
+# Reranker hodnotí, jestli chunk ODPOVÍDÁ na otázku, a krátká poznámka, která
+# Kaggle jen zmiňuje, na „kde o něm mluvím" neodpovídá — skóre spadne pod
+# ANSWER_MIN_RERANK a `dost_relevantni()` ji zahodí. Uvozovací obrat nenese
+# o tématu žádnou informaci, jen hledání ředí.
+#
+# Vzory se porovnávají nad `_ascii_stejne_dlouhe()`, takže fungují s diakritikou
+# i bez ní, ale ŘEŽE SE PŮVODNÍ TEXT: diakritika mění pořadí výsledků (P7),
+# takže hledat se musí s tím, co uživatel napsal.
+#
+# Ořezává se JEN HLEDÁNÍ. Model v `answer()` dostane otázku celou — „kde
+# o tom mluvím" chce v odpovědi cesty k poznámkám, ne výklad tématu.
+_SLOVESA_ZMINKY = (
+    r"mluvim|mluvil[a]?|pisu|psal[a]?|zminuj[iu]|zminoval[a]?|zminil[a]?|"
+    r"pisi|rikam|rikal[a]?|resim|resil[a]?|mam|najdu|se (?:pise|mluvi|zminuj[iu])|"
+    r"jsem (?:si )?(?:psal[a]?|zapsal[a]?|poznamenal[a]?|zminil[a]?|mluvil[a]?|resil[a]?)"
+)
+_PREDLOZKA = r"(?:o|ohledne|na tema|kolem)"
+# „k/ke" jen po rozkazu: „najdi poznámky ke X" ano, „co mám k obědu" ne.
+_PREDLOZKA_K = r"(?:o|ohledne|na tema|kolem|k|ke)"
+_OBRATY_ZACATEK = [re.compile(p) for p in (
+    # zdvořilostní předpona, může stát před kterýmkoliv obratem níž
+    r"^(?:prosim(?:te)?,?\s+)?(?:muzes|muzete|mohl[a]? bys|mohli byste)\s+(?:mi\s+)?",
+    r"^prosim(?:te)?,?\s+",
+    r"^kde\s+(?:vsude\s+|vsech\s+)?(?:(?:v poznamkach|v mych poznamkach)\s+)?"
+    rf"(?:{_SLOVESA_ZMINKY})\s+(?:(?:neco|nejak[ey]?)\s+)?{_PREDLOZKA}\s+",
+    r"^(?:dej|dejte|dat|dodat|podej|poskytni|poskytnout|najdi|vyhledej|ukaz|vypis|shrn|rekni|povez|napis)"
+    r"\s+(?:mi\s+)?(?:prosim\s+)?(?:(?:nejak[ea]|vsechn[ya]|vse|vsechno|neco|vic|vice|"
+    r"podrobnosti|informac[ei]|info|poznamk[ya]|zminky|zaznamy|souhrn|prehled|shrnuti)\s+)*"
+    rf"(?:{_PREDLOZKA_K}\s+)",
+    r"^(?:co|jake|ktere)\s+(?:(?:informace|poznamky|zaznamy|zminky)\s+)?"
+    r"(?:vim|vis|mam|mas|zname|jsem (?:si )?(?:psal[a]?|zapsal[a]?|poznamenal[a]?)|"
+    rf"pisu|rikam)\s+(?:(?:v poznamkach|v mych poznamkach)\s+)?{_PREDLOZKA}\s+",
+    r"^(?:mam|mas)\s+(?:(?:nejak[e]|neco|vubec neco)\s+)?(?:(?:poznamky|zaznamy|zminky|"
+    rf"informace)\s+)?{_PREDLOZKA}\s+",
+    rf"^(?:hledam|zajima me|zajimaji me)\s+(?:(?:neco|informace|poznamky)\s+)?(?:{_PREDLOZKA}\s+)?",
+)]
+_OBRATY_KONEC = [re.compile(p) for p in (
+    r",?\s+prosim(?:te)?$",
+    r"\s+(?:v|ve)\s+(?:mych\s+|svych\s+)?poznamkach$",
+)]
+
+
+def _ascii_stejne_dlouhe(text: str) -> str:
+    """Malá písmena bez diakritiky, ZNAK PO ZNAKU — délka sedí s originálem,
+    takže pozice nalezené v tomhle řetězci platí i v původním textu.
+    (`_ascii()` celý řetězec normalizuje najednou a znaky bez ASCII obrazu
+    zahodí, takže by pozice ujely.)"""
+    out = []
+    for c in text:
+        z = unicodedata.normalize("NFKD", c).encode("ascii", "ignore").decode()
+        out.append(z[:1].lower() if z else c.lower())
+    return "".join(out)
+
+
+def dotaz_pro_hledani(query: str) -> str:
+    """Odřízne z dotazu uvozovací obraty a vrátí to, podle čeho se má hledat.
+
+    Heuristika nad textem, ne porozumění: když po ořezu nic nezbude (dotaz
+    byl celý jen obrat), vrátí se původní dotaz beze změny. Obraty se řežou
+    opakovaně, protože se skládají („Prosím, můžeš mi dát informace o X?").
+    """
+    puvodni = (query or "").strip()
+    q = puvodni
+    for _ in range(4):
+        a = _ascii_stejne_dlouhe(q)
+        for p in _OBRATY_ZACATEK:
+            m = p.match(a)
+            if m and m.end() < len(q):
+                q = q[m.end():].lstrip()
+                break
+        else:
+            break
+    while True:
+        jadro = q.rstrip(" ?!.,")
+        a = _ascii_stejne_dlouhe(jadro)
+        for p in _OBRATY_KONEC:
+            m = p.search(a)
+            if m and m.start() > 0:
+                q = jadro[:m.start()].rstrip()
+                break
+        else:
+            break
+    if q == puvodni:
+        return puvodni               # žádný obrat, nesahej ani na interpunkci
+    return q.rstrip(" ?!.,") or puvodni
+
+
 def search(query: str, limit: int = None, rewrite: bool | None = None) -> dict:
-    body = {"query": query, "limit": limit or config.CONTEXT_CHUNKS}
+    hledat = dotaz_pro_hledani(query)
+    if hledat != (query or "").strip():
+        log.info("dotaz orezan pro hledani: %r -> %r", query, hledat)
+    body = {"query": hledat, "limit": limit or config.CONTEXT_CHUNKS}
     if rewrite is not None:
         body["rewrite"] = rewrite
     r = httpx.post(config.RETRIEVAL_URL.rstrip("/") + "/search", json=body, timeout=180)
@@ -626,6 +720,58 @@ def dost_relevantni(hits: list[dict]) -> list[dict]:
     return out
 
 
+def podle_jistoty(hits: list[dict]) -> tuple[list[dict], bool]:
+    """Rozdělí chunky na tři pásma a vrátí `(chunky, slaba_opora)`.
+
+    DVOUSTUPŇOVÉ ODMÍTNUTÍ (návrh z D6, zaveden 2026-09-18). `dost_relevantni()`
+    zná jen dva stavy: buď chunk projde, nebo se o něm uživatel nikdy nedozví.
+    Na účetním korpusu se ukázalo, že ten druhý stav je drahý — práh 0,1 tam
+    odmítl 7 ze 42 zodpověditelných dotazů a uživateli řekl „nic jsem nenašel"
+    o dokumentu, který v korpusu prokazatelně leží (měření viz komentář
+    u `config.ANSWER_WEAK_RERANK`).
+
+    Pásma:
+      `>= ANSWER_MIN_RERANK`   — normální odpověď, beze změny proti dřívějšku,
+      `[WEAK, MIN)`            — odpověď S VÝHRADOU; použije se JEN když nad
+                                 hlavním prahem neleží NIC,
+      `< ANSWER_WEAK_RERANK`   — šum, zahazuje se dál (ochrana P4 zůstává).
+
+    PROČ SE SLABÉ PÁSMO BERE AŽ KDYŽ SILNÉ JE PRÁZDNÉ, a ne jako doplněk.
+    Kdyby se přimíchávalo k dobrým trefám, vznikl by přesně mechanismus P4:
+    jedna dobrá trefa a k ní pár chunků těsně nad šumem, ke kterým si model
+    připíše citaci. Slabé pásmo je nouzový režim pro dotaz, který by jinak
+    skončil mlčky — ne přílepek k odpovědi, která stojí sama.
+
+    VRACÍ SE PŘÍZNAK, NE JEN CHUNKY, protože volající musí vědět, že má
+    odpověď označit. Tichý přechod do slabého režimu by z dvoustupňového
+    odmítnutí udělal prosté snížení prahu, a to je právě to, co se v P4
+    nesmí stát.
+    """
+    prah = config.ANSWER_MIN_RERANK
+    silne = dost_relevantni(hits)
+    if silne or prah <= 0:
+        return silne, False
+
+    slaby = config.ANSWER_WEAK_RERANK
+    # `slaby >= prah` by pásmo obrátilo naruby; ber to jako vypnuto.
+    if slaby <= 0 or slaby >= prah:
+        return silne, False
+
+    # Chunk BEZ skóre sem nepatří: `dost_relevantni()` ho propouští do silného
+    # pásma (selhává otevřeně), takže když jsme tady, žádný takový neexistuje.
+    slabe = [h for h in hits
+             if h.get("rerank_score") is not None
+             and slaby <= float(h["rerank_score"]) < prah]
+    if not slabe:
+        return silne, False
+
+    log.info("slaba opora: nad prahem %.3f nic, v pasmu %.3f-%.3f je %d chunku "
+             "(nejlepsi %.4f) -> odpoved s vyhradou misto mlceni",
+             prah, slaby, prah, len(slabe),
+             max(float(h["rerank_score"]) for h in slabe))
+    return slabe, True
+
+
 def zkontroluj_fallback(pozadovany: str, vraceny: str) -> bool:
     """WARNING do logu, když odpověď přišla od jiného modelu, než jsme chtěli.
 
@@ -680,15 +826,20 @@ class Odpoved(NamedTuple):
 
 def _stopa(kandidatu: int, nad_prahem: int, max_rerank: float | None,
            odmitnuto: bool, fallback: bool, odseknuto: bool = False,
-           denik_dni: int | None = None) -> dict:
-    """`odseknuto` a `denik_dni` mají default, protože v předčasném návratu
-    (nic nad prahem) nemají co říct: model se nezavolal, takže se nemá kde
-    odseknout, a deníkový blok se do `extra` nedostal, jinak by se ten
-    návrat vůbec neprovedl."""
+           denik_dni: int | None = None, slaba_opora: bool = False) -> dict:
+    """`odseknuto`, `denik_dni` i `slaba_opora` mají default, protože
+    v předčasném návratu (nic nad prahem) nemají co říct: model se nezavolal,
+    takže se nemá kde odseknout, deníkový blok se do `extra` nedostal — jinak
+    by se ten návrat vůbec neprovedl — a do slabého pásma se nedostalo nic.
+
+    `slaba_opora` je tu proto, že bez ní by dvoustupňové odmítnutí bylo
+    z reportu k nerozeznání od normální odpovědi: `odmitnuto` je False,
+    `n_nad_prahem` nenulové, `max_rerank` nízké. Přesně ten druh rozdílu,
+    který se podle P8 musí dát vyčíst z dat, ne hádat z textu odpovědi."""
     return {"n_kandidatu": kandidatu, "n_nad_prahem": nad_prahem,
             "max_rerank": max_rerank, "odmitnuto": odmitnuto,
             "fallback": fallback, "odseknuto": odseknuto,
-            "denik_dni": denik_dni}
+            "denik_dni": denik_dni, "slaba_opora": slaba_opora}
 
 
 def zaznamenej(kanal: str, dotaz: str, odp: "Odpoved | None",
@@ -749,7 +900,7 @@ def answer(query: str, hits: list[dict], prior: list[dict] | None = None,
     # což je o řád pod prahem 0,1". Právě tenhle rozdíl je celá diagnóza.
     nejlepsi = max((float(h["rerank_score"]) for h in hits
                     if h.get("rerank_score") is not None), default=None)
-    hits = dost_relevantni(hits)
+    hits, slaba_opora = podle_jistoty(hits)
     ctx = "\n\n".join(
         f"[{i+1}] {h['source_path']}"
         + (f" — {h['heading_path']}" if h.get("heading_path") else "")
@@ -816,11 +967,21 @@ def answer(query: str, hits: list[dict], prior: list[dict] | None = None,
     msgs += history_messages(prior)
     facts = corpus_facts()
     uryvky = f"Úryvky z poznámek:\n\n{ctx}\n\n" if ctx else ""
+    # Výhrada patří do UŽIVATELSKÉ zprávy, ne do SYSTEM: system prompt je
+    # pro všechny dotazy stejný a tahle instrukce platí jen pro tenhle jeden.
+    # Dává se PŘED úryvky, aby ji model četl dřív, než si o nich udělá obrázek.
+    vyhrada = (
+        "POZOR: úryvky níž mají k otázce jen SLABOU VAZBU — reranker jim dal "
+        "nízké skóre a je dost možné, že odpověď v korpusu vůbec není. "
+        "Začni odpověď větou, že si nejsi jistý a uživatel si to má ověřit "
+        "ve zdroji. Když v úryvcích odpověď opravdu není, řekni to rovnou "
+        "a nic nedomýšlej.\n\n"
+    ) if slaba_opora else ""
     msgs.append({"role": "user",
                  "content": dnesni_datum()
                             + (f"{facts}\n" if facts else "")
                             + (f"{extra}\n" if extra else "")
-                            + uryvky + f"Otázka: {query}"})
+                            + vyhrada + uryvky + f"Otázka: {query}"})
 
     # `timeout` V TĚLE požadavku je deadline pro LiteLLM, `timeout=` u httpx
     # je deadline klienta — a ten MUSÍ být delší, jinak se Kryton vzdá dřív,
@@ -878,7 +1039,7 @@ def answer(query: str, hits: list[dict], prior: list[dict] | None = None,
                  "zužte období nebo otázku." % strop)
     return Odpoved(text, d.get("model", config.ANSWER_MODEL), ms,
                    _stopa(kandidatu, len(hits), nejlepsi, False, propadl,
-                          odseknuto, denik_dnu))
+                          odseknuto, denik_dnu, slaba_opora))
 
 
 # ---------------------------------------------------------------------------
